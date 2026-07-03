@@ -1,0 +1,3193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Transcodarr</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<style>
+  :root {
+    --bg: #0f0f0f; --surface: #1a1a1a; --border: #2a2a2a;
+    --text: #e0e0e0; --dim: #888; --accent: #4a9eff;
+    --green: #4caf50; --red: #f44336; --yellow: #ff9800;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+
+  .header { padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+  .status-dot.running { background: var(--green); }
+  .status-dot.paused { background: var(--yellow); }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; padding: 12px 16px; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; text-align: center; }
+  .stat .value { font-size: 24px; font-weight: 700; color: var(--accent); }
+  .stat .label { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+
+  /* Scan Activity panel — replaces former Probe Pool / Disk Pool tiles. */
+  .scan-activity { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 0 16px 12px; }
+  .scan-activity .scan-row { display: flex; justify-content: space-between; align-items: baseline; padding: 2px 0; font-size: 13px; }
+  .scan-activity .scan-row .scan-label { color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; font-size: 11px; }
+  .scan-activity .scan-row .scan-value { color: var(--accent); font-weight: 600; }
+  .scan-activity .scan-bar { position: relative; height: 8px; background: var(--border); border-radius: 4px; margin-top: 8px; overflow: hidden; }
+  .scan-activity .scan-fill { position: absolute; top: 0; left: 0; height: 100%; background: var(--accent); transition: width 0.4s ease; }
+  .scan-activity .scan-bar.indeterminate .scan-fill { width: 100% !important; background: repeating-linear-gradient(45deg, var(--accent) 0 10px, var(--border) 10px 20px); background-size: 28px 28px; animation: scan-stripes 1s linear infinite; }
+  .scan-activity .scan-pct { font-size: 11px; color: var(--dim); margin-top: 4px; text-align: right; }
+  @keyframes scan-stripes { from { background-position: 0 0; } to { background-position: 28px 0; } }
+
+  .controls { padding: 8px 16px; }
+  .btn { width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+  .btn:active { opacity: 0.7; }
+  .btn-play { background: var(--green); color: #fff; }
+  .btn-pause { background: var(--yellow); color: #000; }
+
+  .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tab { flex: 1; min-width: 0; padding: 10px 8px; text-align: center; font-size: 12px; font-weight: 500; color: var(--dim); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab .badge { background: var(--border); color: var(--dim); padding: 2px 6px; border-radius: 10px; font-size: 10px; margin-left: 4px; }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px; background: var(--bg); }
+  .filter-btn { padding: 4px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--dim); font-size: 11px; cursor: pointer; white-space: nowrap; }
+  .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .filter-btn .count { opacity: 0.7; margin-left: 3px; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* 8px gap above first item comes from padding-top here, NOT item
+     margin-top. In multi-column mode, browsers collapse an item's
+     margin-top when that item is rendered at the top of a non-first
+     column, which would leave the right column flush with the list
+     top while the left column's first item has its margin honored —
+     producing a subtle ~8px misalignment between columns. Padding on
+     the container applies uniformly to every column track. */
+  .list { padding: 8px 16px 0; }
+  /* Multi-column instead of grid so an expanded item only grows its OWN
+     card. With grid, the rowmate inherited the taller row-height.
+     Load-more / empty / filters live OUTSIDE .list so they cannot be
+     pulled into a column and offset the first/last column heights. */
+  @media (min-width: 600px) {
+    .list { column-count: 2; column-gap: 8px; }
+    .list .item { break-inside: avoid; -webkit-column-break-inside: avoid; }
+  }
+  .list-footer { padding: 0 16px 16px; }
+  .list-footer:empty { padding: 0; }
+  .item { padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; font-size: 13px; word-break: break-all; }
+  .item { cursor: pointer; }
+  .item .file { font-weight: 500; }
+  .item .meta { color: var(--dim); font-size: 11px; margin-top: 4px; }
+  .item .details { display: none; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 11px; color: var(--dim); line-height: 1.6; }
+  .item.expanded .details { display: block; }
+  .detail-row { display: flex; justify-content: space-between; gap: 12px; }
+  .detail-label { color: var(--dim); white-space: nowrap; }
+  .detail-value { color: var(--text); text-align: right; }
+  .item.failed { border-left: 3px solid var(--red); }
+  .item.active-gpu { border-left: 3px solid var(--accent); }
+  .item.active-cpu { border-left: 3px solid var(--green); }
+  .item.active-lang { border-left: 3px solid var(--yellow); }
+
+  .active-section { padding: 0 16px; }
+  .active-header { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; padding: 12px 0 0; }
+  .active-none { font-size: 12px; color: var(--dim); padding: 8px 0; }
+
+  .load-more { width: 100%; padding: 12px; margin-top: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--accent); font-size: 13px; cursor: pointer; text-align: center; }
+  .load-more:active { opacity: 0.7; }
+
+  /* Import-origin badge on GPU/CPU queue rows. Only renders when an item
+     came in via a .job file from Sonarr/Radarr (route=import). Service-
+     specific colors match each arr app's brand. */
+  .row-import-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-right: 6px;
+    vertical-align: middle;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: #1a1a1a;
+  }
+  .row-import-badge.radarr { background: #ffc230; }
+  .row-import-badge.sonarr { background: #35c5f0; }
+
+  .filters-row { display: flex; align-items: center; gap: 8px; padding: 0 16px; background: var(--bg); }
+  .filters-row .filters { padding: 8px 0; flex: 1; min-width: 0; background: transparent; }
+  .panel-action-btn { padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--dim); font-size: 12px; cursor: pointer; flex-shrink: 0; }
+  .panel-action-btn.danger { color: var(--red); border-color: rgba(244, 67, 54, 0.45); }
+  .panel-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .empty { text-align: center; padding: 32px 16px; color: var(--dim); }
+
+  .footer { padding: 16px; margin-top: 24px; border-top: 1px solid var(--border); background: var(--surface); text-align: center; font-size: 11px; color: var(--dim); line-height: 1.8; }
+  .footer a { color: var(--dim); text-decoration: none; }
+  .footer a:hover { color: var(--accent); }
+  .footer .version { color: var(--accent); font-weight: 600; }
+
+  .restart-banner { display: none; padding: 10px 16px; background: #4a2800; color: var(--yellow); font-size: 13px; text-align: center; border-bottom: 1px solid var(--yellow); }
+  .restart-banner.show { display: block; }
+  .btn-restart { display: none; width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; background: var(--red); color: #fff; margin-top: 12px; transition: opacity 0.2s; }
+  .btn-restart:active { opacity: 0.7; }
+  .btn-restart.show { display: block; }
+
+  #settingsContent { }
+  /* Multi-column flow so groups pack tightly with no inter-column row
+     alignment (was: 1fr 1fr grid which created huge empty space below
+     the shorter column). */
+  @media (min-width: 600px) {
+    #settingsContent { column-count: 2; column-gap: 16px; }
+    .settings-group { break-inside: avoid; -webkit-column-break-inside: avoid; }
+  }
+  .settings-group { padding: 12px 16px 0; }
+  .settings-group-title { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .setting-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; }
+  /* Preset-controlled fields stay visible (so users see what the preset
+     is doing) but are non-editable when a preset is active. Switch to
+     "Custom" preset to interact with them. */
+  .setting-row.preset-locked { opacity: 0.55; }
+  .setting-row.preset-locked .setting-label::after { content: ' (preset)'; font-size: 11px; color: var(--dim); }
+  .setting-readonly { font-size: 13px; color: var(--text); padding: 6px 8px; min-width: 80px; text-align: right; }
+  .setting-label { font-size: 13px; }
+  .setting-input { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); padding: 6px 8px; font-size: 13px; width: auto; min-width: 80px; text-align: right; -webkit-appearance: none; }
+  .setting-input.secret-input { -webkit-text-security: disc; text-security: disc; }
+  .integration-test-row { gap: 10px; }
+  .integration-test-buttons { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+  .integration-test-btn { min-width: 72px; color: #fff; border-color: rgba(244, 67, 54, 0.6); background: var(--red); }
+  .integration-test-btn.passed { border-color: rgba(76, 175, 80, 0.7); background: var(--green); }
+  .integration-test-btn.failed { border-color: rgba(244, 67, 54, 0.6); background: var(--red); }
+  .integration-test-btn.testing { border-color: rgba(255, 152, 0, 0.7); background: var(--yellow); color: #000; }
+  .setting-toggle { width: 44px; height: 24px; border-radius: 12px; background: var(--border); border: none; cursor: pointer; position: relative; transition: background 0.2s; }
+  .setting-toggle.on { background: var(--green); }
+  .setting-toggle::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform 0.2s; }
+  .setting-toggle.on::after { transform: translateX(20px); }
+  .setting-row.disk-chip-row { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .disk-chip-list { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+  .disk-chip { padding: 5px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--dim); font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .disk-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .disk-chip.missing { border-style: dashed; }
+  .disk-chip-empty { color: var(--dim); font-size: 12px; padding: 4px 0; }
+
+  /* ── Search bar (above disk filters, below tabs) ─────────────────── */
+  /* Grid layout pins the split: 1 column normally (search full-width),
+     2 equal columns on the Flagged tab via .has-flags so the search
+     input never bleeds past the midpoint regardless of how wide the
+     Clear Flagged button or chip count is. */
+  .search-bar { display: grid; grid-template-columns: 1fr; gap: 8px; align-items: center; padding: 8px 16px 0; }
+  .search-bar.has-flags { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 700px) {
+    .search-bar.has-flags { grid-template-columns: 1fr; }
+  }
+  .search-bar input[type="search"] {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    -webkit-appearance: none;
+  }
+  .search-bar input[type="search"]:focus {
+    outline: none;
+    border-color: var(--green);
+  }
+  .search-bar .flag-controls { display: none; }
+  .search-bar.has-flags .flag-controls { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .search-bar .flag-controls .filters { flex: 1; min-width: 0; padding: 0; background: transparent; }
+
+  /* ── Top panel: Active Workers + Direct Queue side-by-side ───────── */
+  .top-panel {
+    display: flex;
+    flex-direction: row;
+    gap: 12px;
+    align-items: stretch;
+    padding: 0 16px;
+  }
+  .top-panel > .card {
+    flex: 1 1 0;
+    min-width: 0;
+    /* Column layout so action buttons can anchor to the bottom of each
+       card. Both cards stretch to equal height (align-items: stretch
+       on parent), and their action buttons land on the same row. */
+    display: flex;
+    flex-direction: column;
+  }
+  /* Both cards' content sections grow to fill the card so the action
+     buttons below them anchor to the same bottom row across both cards. */
+  .active-workers .active-section,
+  .direct-queue .active-section {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  /* Action buttons anchored to the bottom of their card, sharing the
+     same horizontal padding so they line up across cards. */
+  .card-action {
+    margin: 8px 16px 16px;
+    width: calc(100% - 32px);
+  }
+  @media (max-width: 700px) {
+    .top-panel {
+      flex-direction: column;  /* Active Workers first, Direct second */
+    }
+  }
+  /* Direct Queue list lives inside .active-section so it inherits the
+     same 16px horizontal padding as the Active Workers content. The
+     list itself adds no extra horizontal padding — rows align flush
+     with the .active-header text above (mirrors Active Workers exactly). */
+  .direct-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+  .direct-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border, #333);
+    cursor: pointer;
+  }
+  .direct-list .row-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .direct-list .row-lane-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--border);
+    color: var(--dim);
+    flex-shrink: 0;
+  }
+  .direct-list .row-name {
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .direct-list .row-untag {
+    background: transparent;
+    border: 0;
+    color: var(--muted, #888);
+    font-size: 14px;
+    padding: 2px 6px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .direct-list .row-untag:hover {
+    color: var(--danger, #d44);
+  }
+  /* Direct Queue button reuses .btn .card-action — same shape as
+     Pause/Resume. Only state-specific colors live here. */
+  #direct-action-btn { background: var(--green); color: #fff; }
+  #direct-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  #direct-action-btn.running {
+    background: var(--red);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(0, 200, 100, 0.4); }
+    50%     { box-shadow: 0 0 0 6px rgba(0, 200, 100, 0); }
+  }
+
+  /* ── Queue row "+ Direct" button ────────────────────────────────── */
+  .row-tag {
+    background: var(--accent, #3aa);
+    border: 0;
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 12px;
+    margin-top: 6px;
+  }
+</style>
+</head>
+<body>
+
+<div class="restart-banner" id="restartBanner">Settings changed — restart container to apply</div>
+
+<div class="header">
+  <div style="display:flex;align-items:center">
+    <span class="status-dot" id="statusDot"></span>
+    <img src="https://github.com/jb14813/Transcodarr/raw/main/icon.png" alt="" style="width:28px;height:28px;margin-right:8px;border-radius:4px">
+    <h1>Transcodarr</h1>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span id="statusLabel" style="font-size:12px;color:var(--dim)"></span>
+    <a href="https://ko-fi.com/H2H41XM0EP" target="_blank" style="text-decoration:none;font-size:11px;padding:4px 8px;border-radius:6px;background:#72a4f2;color:#fff;white-space:nowrap">&#9829; Tip a Coffee</a>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="value" id="gpuWorkers">-</div><div class="label">GPU Active</div></div>
+  <div class="stat"><div class="value" id="processed">-</div><div class="label">Processed</div></div>
+  <div class="stat"><div class="value" id="cpuWorkers">-</div><div class="label">CPU Active</div></div>
+  <div class="stat"><div class="value" id="failed" style="color:var(--red)">-</div><div class="label">Failed</div></div>
+</div>
+
+<section class="scan-activity" id="scanActivity">
+  <div class="scan-row" id="scanActivityRow"><span class="scan-label">Activity</span>     <span class="scan-value"><strong id="scanPhase">—</strong> · <span id="scanStatus">—</span></span></div>
+  <div class="scan-row" id="scanPendingRow"><span class="scan-label">Pending</span>      <span class="scan-value"><span id="scanPending">—</span> candidates</span></div>
+  <div class="scan-row"><span class="scan-label">Verified cache</span>  <span class="scan-value"><span id="scanVerifiedUnique">—</span> files</span></div>
+  <div class="scan-row"><span class="scan-label">Failed cache</span>    <span class="scan-value"><span id="scanFailedHash">—</span> files</span></div>
+  <div class="scan-bar" id="scanBar"><div class="scan-fill" id="scanFill" style="width:0%"></div></div>
+  <div class="scan-pct" id="scanPctRow"><span id="scanPct">—</span>%</div>
+</section>
+
+<div class="top-panel">
+  <section class="card active-workers">
+    <div class="active-section">
+      <div class="active-header">Active Workers</div>
+      <div id="activeJobs"><div class="active-none">No active jobs</div></div>
+    </div>
+    <button class="btn card-action" id="toggleBtn" onclick="togglePause()">--</button>
+  </section>
+  <section class="card direct-queue" id="direct-queue-card">
+    <div class="active-section">
+      <div class="active-header">Direct Queue</div>
+      <div id="direct-jobs">
+        <div class="active-none" id="direct-empty">0 staged</div>
+        <ul class="direct-list" id="direct-list"></ul>
+      </div>
+    </div>
+    <button class="btn card-action" id="direct-action-btn" disabled>Start</button>
+  </section>
+</div>
+
+<div class="controls">
+  <button class="btn-restart" id="restartBtn" onclick="restartContainer()">Restart to Apply Changes</button>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="gpu" onclick="switchTab('gpu')">GPU<span class="badge" id="gpuBadge">0</span></div>
+  <div class="tab" data-tab="cpu" onclick="switchTab('cpu')">CPU<span class="badge" id="cpuBadge">0</span></div>
+  <div class="tab" data-tab="processed" onclick="switchTab('processed')">Done<span class="badge" id="procBadge">0</span></div>
+  <div class="tab" data-tab="flagged" onclick="switchTab('flagged')">Flagged<span class="badge" id="flagBadge">0</span></div>
+  <div class="tab" data-tab="failed" onclick="switchTab('failed')">Failed<span class="badge" id="failBadge">0</span></div>
+  <div class="tab" data-tab="settings" onclick="switchTab('settings')">Settings</div>
+</div>
+
+<div class="search-bar" id="searchBar">
+  <input type="search" id="searchInput" placeholder="Search queue items…" autocomplete="off" spellcheck="false" />
+  <div class="flag-controls" id="flagControls">
+    <div class="filters" id="flagFilters"></div>
+    <button class="panel-action-btn danger" id="clearFlaggedBtn" onclick="clearFlaggedList()" disabled style="display:none">Clear Flagged</button>
+  </div>
+</div>
+<div class="filters-row" id="filtersRow">
+  <div class="filters" id="diskFilters"></div>
+  <button class="panel-action-btn danger" id="clearFailedBtn" onclick="clearFailedList()" disabled style="display:none">Clear Failed</button>
+</div>
+
+<div id="panel-gpu" class="panel active"><div class="list" id="list-gpu"></div><div class="list-footer" id="footer-gpu"></div></div>
+<div id="panel-cpu" class="panel"><div class="list" id="list-cpu"></div><div class="list-footer" id="footer-cpu"></div></div>
+<div id="panel-processed" class="panel"><div class="list" id="list-processed"></div><div class="list-footer" id="footer-processed"></div></div>
+<div id="panel-flagged" class="panel"><div class="list" id="list-flagged"></div><div class="list-footer" id="footer-flagged"></div></div>
+<div id="panel-failed" class="panel"><div class="list" id="list-failed"></div><div class="list-footer" id="footer-failed"></div></div>
+<div id="panel-settings" class="panel">
+  <div id="settingsContent"></div>
+</div>
+
+<script>
+var paused = 0;
+var currentTab = 'gpu';
+var offsets = { gpu: 0, cpu: 0, processed: 0, flagged: 0, failed: 0 };
+var loaded = { gpu: false, cpu: false, processed: false, flagged: false, failed: false };
+var PAGE = 50;
+var diskFilter = 'all';
+var searchTerm = '';   // server-side ?q=… filter for queue/tsv list endpoints
+var disksLoaded = false;
+var diskCounts = {};
+var flagFilter = 'all';  // server-side ?reason=… filter for the Flagged tab
+var flagCounts = {};
+var failedClearInFlight = false;
+var flaggedClearInFlight = false;
+var failurePolicyStatus = null;
+// Per-tab disk filter that was active during the last full load. Used by
+// switchTab to decide whether to reload (filter changed) or preserve the
+// user's "Load more" expansion (same filter).
+var lastFilter = { gpu: null, cpu: null, processed: null, flagged: null, failed: null };
+// Per-tab map of identity-key → rendered DOM element. The reconcile path
+// (queue tabs) and the delta-prepend path (TSV tabs) both maintain this so
+// that polls can update list contents without wiping the user's expansion.
+var rowEls = { gpu: {}, cpu: {}, processed: {}, flagged: {}, failed: {} };
+
+function fmtSize(kb) {
+  if (!kb || kb <= 0) return '—';
+  if (kb < 1024) return kb + ' KB';
+  var mb = kb / 1024;
+  if (mb < 1024) return mb.toFixed(1) + ' MB';
+  return (mb / 1024).toFixed(2) + ' GB';
+}
+
+function fmtBytes(b) {
+  if (!b || b <= 0) return '—';
+  return fmtSize(b / 1024);
+}
+
+function detailRow(label, value) {
+  return '<div class="detail-row"><span class="detail-label">' + esc(label) + '</span><span class="detail-value">' + esc(value) + '</span></div>';
+}
+
+function toggleDetails(el) {
+  el.classList.toggle('expanded');
+}
+
+function esc(s) {
+  var d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function compareDiskNames(a, b) {
+  var am = String(a).match(/^disk(\d+)$/);
+  var bm = String(b).match(/^disk(\d+)$/);
+  if (am && bm) return parseInt(am[1]) - parseInt(bm[1]);
+  return String(a).localeCompare(String(b));
+}
+
+function sortDiskNames(disks) {
+  return (disks || []).slice().sort(compareDiskNames);
+}
+
+function parseDiskCsv(raw) {
+  var seen = {};
+  var out = [];
+  String(raw || '').split(',').forEach(function(part) {
+    var disk = part.trim();
+    if (!/^disk\d+$/.test(disk) || seen[disk]) return;
+    seen[disk] = true;
+    out.push(disk);
+  });
+  return sortDiskNames(out);
+}
+
+function diskCsv(disks) {
+  var seen = {};
+  var out = [];
+  sortDiskNames(disks || []).forEach(function(disk) {
+    if (!/^disk\d+$/.test(disk) || seen[disk]) return;
+    seen[disk] = true;
+    out.push(disk);
+  });
+  return out.join(',');
+}
+
+function settingsDiskOptions(selected) {
+  var seen = {};
+  var out = [];
+  function add(disk, mounted) {
+    if (!/^disk\d+$/.test(disk) || seen[disk]) return;
+    seen[disk] = true;
+    out.push({ disk: disk, mounted: mounted });
+  }
+  var statusDisks = lastStatus && Array.isArray(lastStatus.disks) ? lastStatus.disks : [];
+  statusDisks.forEach(function(disk) { add(String(disk), true); });
+  (selected || []).forEach(function(disk) { add(String(disk), false); });
+  return out.sort(function(a, b) {
+    return compareDiskNames(a.disk, b.disk);
+  });
+}
+
+function statusDiskSignature(status) {
+  if (!status) return '';
+  return JSON.stringify(sortDiskNames(status.disks || [])) + '|' +
+    JSON.stringify(sortDiskNames(status.ignored_disks || []));
+}
+
+// Composite key for the lastFilter cache — switching disk/flag filter or
+// search term invalidates the cached list and triggers a fresh load.
+function currentFilterKey() {
+  return diskFilter + '|' + searchTerm + '|' + flagFilter;
+}
+
+function fname(path) {
+  if (!path) return '';
+  var parts = path.split('/');
+  return parts[parts.length - 1];
+}
+
+function num(n) {
+  return (n || 0).toLocaleString();
+}
+
+// Identity key for a row, used by polling to detect new vs. existing rows
+// without wiping the user's expanded view. TSV rows are uniquely identified
+// by (timestamp + path); queue items by path alone (tc:seen dedupes the
+// queue so a path is only present once at any moment).
+function itemKey(tab, item) {
+  if (tab === 'gpu' || tab === 'cpu') {
+    return item.path || item.file || '';
+  }
+  var f = item.fields || [];
+  if (tab === 'processed') {
+    // processed.tsv: path, service, mode, vcodec, ch, orig, out, ts, disk
+    return (f[7] || '') + '|' + (f[0] || '');
+  }
+  if (tab === 'flagged') {
+    // flagged-files.tsv: ts, service, reason, path
+    return (f[0] || '') + '|' + (f[3] || '');
+  }
+  // failed-files.tsv: ts, service, reason, path, vcodec, ch, orig, disk, failure_class
+  return (f[0] || '') + '|' + (f[3] || '');
+}
+
+function renderItem(tab, item) {
+  if (tab === 'gpu' || tab === 'cpu') return renderQueueItem(item);
+  if (tab === 'processed') return renderProcessedItem(item.fields || []);
+  if (tab === 'flagged')   return renderFlaggedItem(item.fields || []);
+  return renderFailedItem(item.fields || [], item.policy || null);
+}
+
+function fetchStatus() {
+  var qp = '';
+  if (currentTab === 'gpu') qp = '?queue=gpu';
+  else if (currentTab === 'cpu') qp = '?queue=cpu';
+  fetch('/api/status' + qp)
+    .then(function(r) { return r.json(); })
+    .then(handleStatus)
+    .catch(function() {});
+}
+
+function fetchFailurePolicyStatus() {
+  return fetch('/api/failure-policy/status')
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) {
+      if (!data) return;
+      failurePolicyStatus = data;
+      if (currentTab === 'settings' && configData) renderSettingsIfIdle();
+    })
+    .catch(function() {});
+}
+
+// ── Direct Queue — staged list + Start/Stop ───────────────────────────
+// The Direct Queue card shows items the user has tagged to fast-track
+// through the transcode pipeline (bypasses normal queue ordering).
+// Populated by /api/direct; mutated by /api/direct/{tag,untag,start,stop}.
+var directListCache = [];
+
+function fetchDirectList() {
+  return fetch('/api/direct?offset=0&limit=100')
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) {
+      if (!data) return;
+      directListCache = data.items || [];
+      renderDirectList();
+    })
+    .catch(function() { /* transient — next poll retries */ });
+}
+
+function renderDirectList() {
+  var ul = document.getElementById('direct-list');
+  if (!ul) return;
+  while (ul.firstChild) ul.removeChild(ul.firstChild);
+  for (var i = 0; i < directListCache.length; i++) {
+    var item  = directListCache[i];
+    var badge = (item.lane || '').indexOf(':gpu:') !== -1 ? 'GPU' : 'CPU';
+
+    var li = document.createElement('li');
+    li.dataset.hash = item.file_hash || '';
+    li.dataset.lane = item.lane      || '';
+
+    var meta = document.createElement('span');
+    meta.className = 'row-meta';
+    var badgeEl = document.createElement('span');
+    badgeEl.className   = 'row-lane-badge';
+    badgeEl.textContent = badge;
+    var nameEl = document.createElement('span');
+    nameEl.className   = 'row-name';
+    nameEl.textContent = item.file || '';
+    meta.appendChild(badgeEl);
+    meta.appendChild(nameEl);
+
+    var btn = document.createElement('button');
+    btn.className       = 'row-untag';
+    btn.title           = 'Remove from Direct Queue';
+    btn.textContent     = '×';
+    btn.dataset.payload = item.payload || '';
+    btn.dataset.lane    = item.lane    || '';
+
+    li.appendChild(meta);
+    li.appendChild(btn);
+    ul.appendChild(li);
+  }
+}
+
+// Standalone poll — 5s cadence, throttled by document.hidden so background
+// tabs don't thrash. Primary refresh triggers are (a) counts-changed in
+// handleStatus() and (b) explicit refetchAll() after tag/untag/start/stop.
+setInterval(function() {
+  if (!document.hidden) fetchDirectList();
+}, 5000);
+fetchDirectList();
+
+// Tag/untag POSTs increment this on start, decrement on finish. While > 0
+// the Start/Stop button is force-disabled (pendingDisabled dataset flag)
+// so the user can't race the backend state. handleStatus() respects the
+// flag when it computes the button's enabled state.
+var directTagsInFlight = 0;
+
+// Full-refresh sweep invoked after any mutation (tag/untag/start/stop).
+// fetchStatus() is fire-and-forget (doesn't return a Promise), so we
+// inline the fetch here and thread handleStatus manually to keep the
+// Promise.all semantics the callers expect.
+function refetchAll() {
+  var p1 = fetchDirectList();
+  var p2 = fetch('/api/status')
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) { if (data) handleStatus(data); })
+    .catch(function() {});
+  // loadList is not Promise-returning; fire it side-effect-only and
+  // resolve immediately so the Promise.all doesn't hang on it.
+  if (currentTab && currentTab !== 'settings') {
+    try { loadList(currentTab, false); } catch (e) { /* ignore */ }
+  }
+  return Promise.all([p1, p2]);
+}
+
+function applyPendingLock() {
+  var btn = document.getElementById('direct-action-btn');
+  if (!btn) return;
+  if (directTagsInFlight > 0) {
+    btn.dataset.pendingDisabled = '1';
+    btn.disabled = true;
+  } else {
+    delete btn.dataset.pendingDisabled;
+    // Leave the concrete enabled/disabled state to the next handleStatus
+    // tick — it knows the true direct_active + stagedTotal values.
+  }
+}
+
+// Bind once, on DOMContentLoaded-equivalent timing — the button exists
+// at parse time because it's declared in-HTML above the <script>, so we
+// can bind synchronously here.
+(function() {
+  var actionBtn = document.getElementById('direct-action-btn');
+  if (!actionBtn) return;
+  actionBtn.addEventListener('click', function(ev) {
+    var btn    = ev.currentTarget;
+    var action = btn.textContent === 'Stop' ? 'stop' : 'start';
+    btn.disabled = true;
+    fetch('/api/direct/' + action, { method: 'POST' })
+      .then(function(r) {
+        // 409 = backend disagrees with our view of direct_active; force
+        // a full resync so the button reflects reality on next tick.
+        if (!r.ok && r.status === 409) {
+          return refetchAll();
+        }
+      })
+      .catch(function() { /* transient */ })
+      .then(function() {
+        // Let handleStatus re-derive the correct disabled state on the
+        // next poll rather than forcing it here.
+        btn.disabled = false;
+      });
+  });
+})();
+
+// Delegated click handler for per-row [+ Direct] (queue tabs) and [×]
+// (Direct Queue card) buttons. stopPropagation prevents the row's
+// toggleDetails onclick from firing underneath the button click.
+// 404 from tag/untag means the item was already claimed or moved —
+// force a refetch so the UI catches up.
+document.addEventListener('click', function(ev) {
+  var tagBtn   = ev.target.closest ? ev.target.closest('.row-tag')   : null;
+  var untagBtn = ev.target.closest ? ev.target.closest('.row-untag') : null;
+
+  function handle(url, bodyObj) {
+    directTagsInFlight++;
+    applyPendingLock();
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyObj)
+    })
+      .then(function(r) {
+        if (r.status === 404) return refetchAll();
+      })
+      .catch(function() { /* transient */ })
+      .then(function() {
+        directTagsInFlight--;
+        applyPendingLock();
+        return refetchAll();
+      });
+  }
+
+  if (tagBtn) {
+    ev.stopPropagation();
+    var p = tagBtn.dataset.payload;
+    var l = tagBtn.dataset.lane;
+    if (p && l) handle('/api/direct/tag', { source_lane: l, payload: p });
+  } else if (untagBtn) {
+    ev.stopPropagation();
+    var up = untagBtn.dataset.payload;
+    var ul = untagBtn.dataset.lane;
+    if (up && ul) handle('/api/direct/untag', { direct_lane: ul, payload: up });
+  }
+});
+
+function togglePause() {
+  var endpoint = paused ? '/api/resume' : '/api/pause';
+  fetch(endpoint, { method: 'POST' })
+    .then(function() { fetchStatus(); })
+    .catch(function() {});
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  var tabs = document.querySelectorAll('.tab');
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].className = tabs[i].getAttribute('data-tab') === tab ? 'tab active' : 'tab';
+  }
+  var panels = document.querySelectorAll('.panel');
+  for (var i = 0; i < panels.length; i++) {
+    panels[i].className = panels[i].id === 'panel-' + tab ? 'panel active' : 'panel';
+  }
+  var fr = document.getElementById('filtersRow');
+  // Disk filter is meaningless on Flagged (no disk column in flagged-files.tsv)
+  // and Settings (no list). Hide the whole row in those cases.
+  if (fr) fr.style.display = (tab === 'settings' || tab === 'flagged') ? 'none' : '';
+  var cfb = document.getElementById('clearFailedBtn');
+  if (cfb) cfb.style.display = tab === 'failed' ? '' : 'none';
+  var sbEl = document.getElementById('searchBar');
+  if (sbEl) sbEl.classList.toggle('has-flags', tab === 'flagged');
+  updateClearFlaggedBtnVisibility();
+  var sb = document.getElementById('searchBar');
+  if (sb) sb.style.display = tab === 'settings' ? 'none' : '';
+  if (tab === 'settings') {
+    if (configData) renderSettings();
+    fetchCapabilities().then(function() {
+      if (configData) {
+        configData = normalizeConfig(configData);
+        renderSettingsIfIdle();
+      }
+    });
+    fetchFailurePolicyStatus();
+    return;
+  }
+
+  // Re-fetch status (drives the queue-filter param for disk counts and the
+  // active-jobs widget). Cheap and unconditional.
+  fetchStatus();
+
+  // Only re-fetch the list itself if it's empty OR the disk filter has
+  // changed since the last full load. Switching tabs back and forth no
+  // longer wipes a "Load more" expansion.
+  var list = document.getElementById('list-' + tab);
+  var footer = document.getElementById('footer-' + tab);
+  var needsFullLoad = !loaded[tab]
+    || !list.children.length
+    || (footer && footer.querySelector('.empty'))
+    || lastFilter[tab] !== currentFilterKey();
+  if (needsFullLoad) {
+    loadList(tab, false);
+  } else {
+    // Already populated with the right filter — just freshen contents
+    // in place without disturbing the user's expansion.
+    pollListDelta(tab);
+  }
+}
+
+function renderQueueItem(item) {
+  var d = document.createElement('div');
+  d.className = 'item';
+  d.onclick = function() { toggleDetails(this); };
+  // Import-origin badge: rendered only when route=import, which means the
+  // item entered the pipeline via a .job file dropped by Sonarr/Radarr's
+  // Custom Script (the priority-import path). Bulk-scanned items (route=bulk)
+  // get no badge. Direct-tagged items live in their own card and don't show
+  // up here. Service-specific text so the user sees which arr app pushed it.
+  var importBadge = '';
+  if (item.route === 'import' && item.service) {
+    var svcName = item.service.charAt(0).toUpperCase() + item.service.slice(1);
+    importBadge = '<span class="row-import-badge ' + esc(item.service) + '">' + esc(svcName) + '</span>';
+  }
+  d.innerHTML = '<div class="file">' + importBadge + esc(item.file) + '</div>' +
+    '<div class="meta">' + esc(item.vcodec || '?') + ' &middot; ' + esc(item.disk || '?') + ' &middot; ' + fmtSize(item.size_kb) + '</div>' +
+    '<div class="details">' +
+      detailRow('Service', item.service) +
+      detailRow('Video Codec', item.vcodec || '?') +
+      detailRow('Audio', item.channels + 'ch x ' + item.tracks + ' tracks') +
+      detailRow('File Size', fmtSize(item.size_kb)) +
+      detailRow('Disk', item.disk || '?') +
+    '</div>';
+  // + Direct button. Appended via DOM API (not innerHTML) so the raw
+  // payload string — which may contain double-quotes from filepaths —
+  // can be stashed on dataset.payload without needing attr-escaping.
+  // esc() is textContent-based and does NOT escape ", so embedding
+  // the payload in a double-quoted data-payload attribute via innerHTML
+  // would break the markup. dataset.* accepts raw strings safely.
+  if (item.payload && item.lane) {
+    var tagBtn = document.createElement('button');
+    tagBtn.className       = 'row-tag';
+    tagBtn.title           = 'Add to Direct Queue';
+    tagBtn.textContent     = '+ Direct';
+    tagBtn.dataset.payload = item.payload;
+    tagBtn.dataset.lane    = item.lane;
+    d.appendChild(tagBtn);
+  }
+  return d;
+}
+
+// Friendly labels for processed.tsv mode column. Legacy `ok` (pre-2026-04-18)
+// and current `already_ok` both mean "file already met spec — no transcode
+// needed"; show as "Already OK" so the Done list distinguishes no-work
+// skips from real transcodes (GPU / CPU / Audio Only).
+var MODE_LABEL = {
+  ok: 'Already OK',
+  already_ok: 'Already OK',
+  gpu: 'GPU',
+  cpu: 'CPU',
+  audio_only: 'Audio Only'
+};
+function modeLabel(m) { return MODE_LABEL[m] || (m || ''); }
+
+function renderProcessedItem(fields) {
+  var d = document.createElement('div');
+  d.className = 'item';
+  d.onclick = function() { toggleDetails(this); };
+  var path = fields[0] || '';
+  var svc = fields[1] || '';
+  var mode = fields[2] || '';
+  var modeLbl = modeLabel(mode);
+  var vcodec = fields[3] || '';
+  var ch = fields[4] || '';
+  var origSize = fields[5] || '';
+  var outSize = fields[6] || '';
+  var ts = fields[7] || fields[3] || '';
+  var disk = fields[8] || fields[4] || '';
+  d.innerHTML = '<div class="file">' + esc(fname(path)) + '</div>' +
+    '<div class="meta">' + esc(modeLbl) + (disk ? ' &middot; ' + esc(disk) : '') + ' &middot; ' + fmtBytes(outSize) + '</div>' +
+    '<div class="details">' +
+      detailRow('Service', svc) +
+      detailRow('Mode', modeLbl) +
+      detailRow('Original Codec', vcodec) +
+      detailRow('Channels', ch) +
+      detailRow('Original Size', fmtBytes(origSize)) +
+      detailRow('Output Size', fmtBytes(outSize)) +
+      detailRow('Timestamp', ts) +
+      detailRow('Disk', disk) +
+    '</div>';
+  return d;
+}
+
+function renderFailedItem(fields, policy) {
+  var d = document.createElement('div');
+  d.className = 'item failed';
+  d.onclick = function() { toggleDetails(this); };
+  var ts = fields[0] || '';
+  var svc = fields[1] || '';
+  var reason = fields[2] || '';
+  var path = fields[3] || '';
+  var vcodec = fields[4] || '';
+  var ch = fields[5] || '';
+  var origSize = fields[6] || '';
+  var disk = fields[7] || '';
+  var failClass = fields[8] || '';
+  var failBadge = '';
+  if (failClass && failClass !== 'n/a') {
+    failBadge = ' <span style="background:#d32f2f;color:#fff;padding:1px 6px;border-radius:3px;font-size:0.75em;margin-left:4px;">' + esc(failClass.replace(/_/g, ' ')) + '</span>';
+  }
+  var policyBadge = '';
+  var policyState = policy && policy.state ? policy.state : '';
+  if (policyState) {
+    policyBadge = ' <span style="background:#3aa;color:#fff;padding:1px 6px;border-radius:3px;font-size:0.75em;margin-left:4px;">policy ' + esc(policyState.replace(/_/g, ' ')) + '</span>';
+  }
+  var policyDetail = policy && policy.proof && policy.proof.message ? policy.proof.message : '';
+  d.innerHTML = '<div class="file">' + esc(fname(path)) + '</div>' +
+    '<div class="meta">' + esc(reason) + failBadge + policyBadge + ' &middot; ' + esc(svc) + ' &middot; ' + fmtBytes(origSize) + '</div>' +
+    '<div class="details">' +
+      detailRow('Service', svc) +
+      detailRow('Reason', reason) +
+      (failBadge ? detailRow('Classification', failClass.replace(/_/g, ' ')) : '') +
+      (policyState ? detailRow('Policy State', policyState) : '') +
+      (policyDetail ? detailRow('Policy Detail', policyDetail) : '') +
+      detailRow('Original Codec', vcodec) +
+      detailRow('Channels', ch) +
+      detailRow('File Size', fmtBytes(origSize)) +
+      detailRow('Disk', disk) +
+      detailRow('Timestamp', ts) +
+    '</div>';
+  return d;
+}
+
+function renderFlaggedItem(fields) {
+  // flagged-files.tsv columns: ts, service, reason, path, detail
+  // (detail is the offending value — codec name, "1920x1078", "78 kbps/Mpx",
+  // etc. Older rows written before 2026-04-25 lack the detail column.)
+  var d = document.createElement('div');
+  d.className = 'item flagged';
+  d.onclick = function() { toggleDetails(this); };
+  var ts = fields[0] || '';
+  var svc = fields[1] || '';
+  var reason = fields[2] || '';
+  var path = fields[3] || '';
+  var detail = fields[4] || '';
+  var reasonBadge = '<span style="background:#b58900;color:#fff;padding:1px 6px;border-radius:3px;font-size:0.75em;margin-right:4px;">' + esc(reason.replace(/_/g, ' ')) + '</span>';
+  var detailInline = detail ? esc(detail) + ' &middot; ' : '';
+  d.innerHTML = '<div class="file">' + esc(fname(path)) + '</div>' +
+    '<div class="meta">' + reasonBadge + detailInline + esc(svc) + ' &middot; ' + esc(ts) + '</div>' +
+    '<div class="details">' +
+      detailRow('Service', svc) +
+      detailRow('Reason', reason.replace(/_/g, ' ')) +
+      (detail ? detailRow('Value', detail) : '') +
+      detailRow('Path', path) +
+      detailRow('Flagged At', ts) +
+    '</div>';
+  return d;
+}
+
+function loadList(tab, append) {
+  var list = document.getElementById('list-' + tab);
+  var footer = document.getElementById('footer-' + tab);
+  if (!append) {
+    offsets[tab] = 0;
+    rowEls[tab] = {};
+    lastFilter[tab] = currentFilterKey();
+  }
+
+  var url;
+  if (tab === 'gpu' || tab === 'cpu') {
+    url = '/api/queue/' + tab + '?offset=' + offsets[tab] + '&limit=' + PAGE;
+  } else {
+    url = '/api/tsv/' + tab + '?offset=' + offsets[tab] + '&limit=' + PAGE;
+  }
+  if (diskFilter !== 'all') url += '&disk=' + encodeURIComponent(diskFilter);
+  if (searchTerm) url += '&q=' + encodeURIComponent(searchTerm);
+  if (tab === 'flagged' && flagFilter !== 'all') url += '&reason=' + encodeURIComponent(flagFilter);
+
+  fetch(url)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      loaded[tab] = true;
+      // TSV tabs return their own disk_counts — update buttons when active
+      if ((tab === 'processed' || tab === 'failed') && tab === currentTab && data.disk_counts && disksLoaded) {
+        updateDiskCounts(data.disk_counts);
+      }
+      if (tab === 'flagged' && tab === currentTab && data.reason_counts) {
+        updateFlagCounts(data.reason_counts);
+      }
+
+      // Only clear after data arrives (not before fetch)
+      if (!append) {
+        list.innerHTML = '';
+        footer.innerHTML = '';
+      }
+
+      if (!data.items.length && !append) {
+        footer.innerHTML = '<div class="empty">' +
+          (tab === 'gpu' || tab === 'cpu' ? 'Queue empty' : 'No entries') + '</div>';
+        return;
+      }
+
+      // Footer owns load-more — clear before re-rendering with new offset.
+      footer.innerHTML = '';
+
+      for (var i = 0; i < data.items.length; i++) {
+        var item = data.items[i];
+        var key = itemKey(tab, item);
+        var el = renderItem(tab, item);
+        list.appendChild(el);
+        rowEls[tab][key] = el;
+      }
+
+      offsets[tab] += data.items.length;
+
+      if (offsets[tab] < data.total) {
+        var btn = document.createElement('button');
+        btn.className = 'load-more';
+        btn.textContent = 'Load more (' + num(data.total - offsets[tab]) + ' remaining)';
+        btn.onclick = (function(t) { return function() { loadList(t, true); }; })(tab);
+        footer.appendChild(btn);
+      }
+    })
+    .catch(function() {});
+}
+
+// ── Settings ──────────────────────────────────────────────────────────
+
+var configData = null;
+var configBoot = null;
+// Last /api/status response. Holds runtime-detected fields like
+// tmp_dir_available / tmp_dir_path that the settings renderer uses
+// for conditional visibility. Populated by handleStatus() before
+// renderSettings() fires via the init queue.
+var lastStatus = null;
+// Encoder capability probe results from /api/capabilities. Hash of
+// encoder name → "1" (available) or "0" (unavailable). Populated by
+// the init queue before renderSettings, used to hide target_codec
+// options that the running hardware + driver + ffmpeg build can't
+// actually use (e.g. av1_nvenc on Ampere RTX 30-series, which is
+// COMPILED INTO ffmpeg but fails at encode time — list-based checks
+// miss this; only an actual test-encode catches it).
+var capabilities = {};
+
+function fetchCapabilities() {
+  return fetch('/api/capabilities')
+    .then(function(r) { return r.json(); })
+    .then(function(d) { capabilities = d || {}; return capabilities; })
+    .catch(function() {});
+}
+
+function defaultLangDevice() {
+  var backend = capabilities && capabilities.lang_backend ? String(capabilities.lang_backend) : '';
+  return backend && backend !== 'cpu' ? backend : 'cpu';
+}
+
+function langModelFolderDisplayPath() {
+  return (capabilities && (capabilities.lang_model_host_dir || capabilities.lang_model_dir)) || '/models';
+}
+
+// Mirrors of scripts/transcodarr-codec-tables.sh PRESETS + AUDIO_BITRATE_DEFAULTS.
+// Used to show the preset's effective values in greyed-out fields when a
+// preset is active. Keep in sync with the bash tables — these are the
+// source of truth for what the worker actually applies.
+var PRESET_VIDEO = {
+  fast:        { quality_tier: 'fast',        encoder_speed: 'fastest', nvenc_extras: false, qsv_extras: false, film_grain: 0 },
+  balanced:    { quality_tier: 'excellent',   encoder_speed: 'medium',  nvenc_extras: true,  qsv_extras: true,  film_grain: 8 },
+  transparent: { quality_tier: 'transparent', encoder_speed: 'slow',    nvenc_extras: true,  qsv_extras: true,  film_grain: 8 }
+};
+var PRESET_AUDIO = {
+  fast: {
+    aac:  { mono: '64k', stereo: '96k',  surround_51: '320k', surround_71: '384k' },
+    ac3:  { mono: '80k', stereo: '128k', surround_51: '384k', surround_71: '384k' },
+    eac3: { mono: '80k', stereo: '128k', surround_51: '384k', surround_71: '448k' },
+    opus: { mono: '48k', stereo: '96k',  surround_51: '256k', surround_71: '384k' }
+  },
+  balanced: {
+    aac:  { mono: '80k', stereo: '128k', surround_51: '384k', surround_71: '576k' },
+    ac3:  { mono: '96k', stereo: '192k', surround_51: '448k', surround_71: '448k' },
+    eac3: { mono: '96k', stereo: '192k', surround_51: '448k', surround_71: '640k' },
+    opus: { mono: '64k', stereo: '128k', surround_51: '384k', surround_71: '448k' }
+  },
+  transparent: {
+    aac:  { mono: '128k', stereo: '192k', surround_51: '512k', surround_71: '640k' },
+    ac3:  { mono: '128k', stereo: '224k', surround_51: '448k', surround_71: '448k' },
+    eac3: { mono: '128k', stereo: '256k', surround_51: '576k', surround_71: '768k' },
+    opus: { mono: '96k',  stereo: '128k', surround_51: '384k', surround_71: '448k' }
+  }
+};
+
+// Map audio bitrate field key → channel key used by PRESET_AUDIO.
+var AUDIO_BITRATE_FIELD_TO_CH = {
+  bitrate_mono: 'mono',
+  bitrate_stereo: 'stereo',
+  bitrate_surround_51: 'surround_51',
+  bitrate_surround_71: 'surround_71'
+};
+
+// Map (hw_decoding, codec) → concrete ffmpeg encoder name. Used by the
+// capability filter to resolve which encoder the current target_codec
+// option would invoke on the current hardware backend.
+var TARGET_CODEC_ENCODER = {
+  cuda: { h264: 'h264_nvenc', hevc: 'hevc_nvenc', av1: 'av1_nvenc' },
+  qsv:  { h264: 'h264_qsv',   hevc: 'hevc_qsv',   av1: 'av1_qsv'   },
+  none: { h264: 'libx264',    hevc: 'libx265',    av1: 'libsvtav1' }
+};
+
+// For fields whose option set depends on runtime capability probes,
+// return a (options, labels) pair filtered against the `capabilities`
+// global. Falls through to the schema-declared lists for ungated fields.
+//
+// Currently only target_codec is gated — the (hw_decoding, codec) pair
+// resolves to a specific encoder name, and we hide any codec option
+// whose encoder the boot probe marked unavailable (e.g., av1_nvenc on
+// Ampere — compiled into ffmpeg but the hardware has no AV1 encoder,
+// so invoking it fails at runtime).
+//
+// Permissive on unknowns: if capabilities is empty (probe still running
+// or API returned {}), show all options. Worker still enforces at
+// encode time via the availability check.
+function getEffectiveOptions(fieldKey, field) {
+  if (fieldKey === 'target_codec') {
+    var hwVal = (configData && configData['gpu']) ? configData['gpu']['hw_decoding'] : 'cuda';
+    var currentVal = (configData && configData['gpu']) ? configData['gpu']['target_codec'] : '';
+    var mapping = TARGET_CODEC_ENCODER[hwVal] || {};
+    var filteredOpts = [];
+    var filteredLabels = [];
+    for (var i = 0; i < field.options.length; i++) {
+      var codec = field.options[i];
+      var encoderName = mapping[codec];
+      // Hide only when we have a definitive "0" from the probe. An
+      // unknown (empty / undefined) means show it — the worker will
+      // catch at encode time if it really can't run.
+      if (encoderName && capabilities[encoderName] === '0') {
+        // Special case: if this codec is the user's CURRENTLY SELECTED
+        // value, keep it in the dropdown with an "(unavailable)" marker
+        // so the user sees they have a broken config and can fix it
+        // explicitly, instead of the browser silently switching to the
+        // first option. Gate on probe_available being present — if the
+        // probe just hasn't run yet, fall through to the else branch.
+        if (String(codec) === String(currentVal)) {
+          filteredOpts.push(codec);
+          filteredLabels.push(((field.labels && field.labels[i]) || String(codec)) + ' — unavailable on this hardware');
+        }
+        continue;
+      }
+      filteredOpts.push(codec);
+      filteredLabels.push((field.labels && field.labels[i]) || String(codec));
+    }
+    return { options: filteredOpts, labels: filteredLabels };
+  }
+  return { options: field.options, labels: field.labels || [] };
+}
+
+// Mirror the active preset's values into the individual config keys the
+// preset controls (quality_tier, encoder_speed, nvenc_extras, qsv_extras,
+// film_grain — per PRESET_VIDEO; and bitrate_mono/stereo/surround_51/71 —
+// per PRESET_AUDIO scoped to the current audio.codec).
+//
+// Why: at runtime the worker always re-applies the preset by re-reading
+// PRESETS (scripts/transcodarr-codec-tables.sh), so stored individual
+// values get overridden every encode. But config.json should mirror
+// what's actually in effect — otherwise the UI's "(preset)" readout,
+// any manual curl/jq inspection, and next-boot debug all show stale
+// values that don't match what the worker's really using.
+//
+// Called on:
+//   1. Initial config load (cleans up any pre-existing stale remnants)
+//   2. Preset change (user flips fast/balanced/transparent)
+//   3. Audio codec change (audio preset bitrates re-scope per codec)
+//
+// Returns true if any value changed (caller should saveConfig).
+// No-op when preset=custom (user chose manual control, leave alone).
+function applyPresetToConfig() {
+  if (!configData || !configData.gpu) return false;
+  var preset = configData.gpu.preset;
+  if (!preset || preset === 'custom' || !PRESET_VIDEO[preset]) return false;
+
+  var changed = false;
+
+  // Video-side preset keys — all in configData.gpu
+  var videoDef = PRESET_VIDEO[preset];
+  for (var k in videoDef) {
+    if (configData.gpu[k] !== videoDef[k]) {
+      configData.gpu[k] = videoDef[k];
+      changed = true;
+    }
+  }
+
+  // Audio-side preset keys — scoped to current audio codec. Audio
+  // bitrates live in configData.audio.bitrate_*.
+  var codec = configData.audio ? configData.audio.codec : 'aac';
+  var audDef = PRESET_AUDIO[preset] && PRESET_AUDIO[preset][codec];
+  if (audDef) {
+    var chKeyToConfig = {
+      mono:        'bitrate_mono',
+      stereo:      'bitrate_stereo',
+      surround_51: 'bitrate_surround_51',
+      surround_71: 'bitrate_surround_71'
+    };
+    for (var ch in audDef) {
+      var cfgKey = chKeyToConfig[ch];
+      if (cfgKey && configData.audio[cfgKey] !== audDef[ch]) {
+        configData.audio[cfgKey] = audDef[ch];
+        changed = true;
+      }
+    }
+  }
+
+  return changed;
+}
+
+// Enforce cross-field invariants on configData that aren't preset-driven.
+// Runs AFTER applyPresetToConfig so preset derivation is already settled.
+// Currently: h264 can't carry BT.2020/PQ metadata, so hdr_handling must
+// be "tonemap" whenever target_codec=h264.
+// Returns true if any value changed.
+function reconcileDerivedInvariants() {
+  if (!configData || !configData.gpu) return false;
+  var changed = false;
+  if (configData.gpu.target_codec === 'h264' &&
+      configData.gpu.hdr_handling !== 'tonemap') {
+    configData.gpu.hdr_handling = 'tonemap';
+    changed = true;
+  }
+  return changed;
+}
+
+// Look up the value the preset will actually apply for a given field. When
+// preset = custom (or unknown), returns undefined so the caller falls back
+// to the user-stored value.
+function getPresetEffective(fieldKey) {
+  var preset = configData && configData.gpu ? configData.gpu.preset : 'balanced';
+  if (!preset || preset === 'custom') return undefined;
+  if (PRESET_VIDEO[preset] && PRESET_VIDEO[preset][fieldKey] !== undefined) {
+    return PRESET_VIDEO[preset][fieldKey];
+  }
+  var chKey = AUDIO_BITRATE_FIELD_TO_CH[fieldKey];
+  if (chKey) {
+    var codec = configData && configData.audio ? configData.audio.codec : 'aac';
+    var t = PRESET_AUDIO[preset] && PRESET_AUDIO[preset][codec];
+    if (t && t[chKey] !== undefined) return t[chKey];
+  }
+  return undefined;
+}
+
+// Settings are organized into 8 focused groups, ordered by semantic
+// cluster (output contract → how to produce → track filtering → audio
+// nuance → concurrency → resource safety → dev knobs). Sections render
+// into a 2-column CSS multi-column flow at ≥600px, so the declared
+// order is a semantic grouping, NOT a strict vertical reading order.
+//
+// Each field's `src` maps it to a config.json path (group.key). When
+// `src` is omitted, the SCHEMA section key is used as the config
+// group. To keep this decoupled, every field here sets `src:`
+// explicitly — the schema-section names (output, video_processing,
+// track_selection, audio_tuning, concurrency, diagnostics, etc.) are
+// presentation-only and do not need to match config.json keys.
+//
+// Config.json shape is deliberately NOT mirrored in this schema.
+// Moves between sections require no config migration.
+var settingsSchema = {
+  general: {
+    label: 'General',
+    fields: {
+      start_paused: { label: 'Start Paused on Boot', type: 'toggle', src: 'general.start_paused' },
+      timeout: { label: 'Job Timeout (hours)', type: 'select', options: [1,2,4,8,12,24], scale: 3600, src: 'general.timeout' },
+      // Hardware Acceleration lives in General since it's an
+      // infrastructure choice that affects the whole pipeline, not
+      // just one encoder knob.
+      hw_decoding: { label: 'Hardware Acceleration', type: 'select',
+        options: ['cuda','qsv','none'],
+        labels: ['NVIDIA (CUDA)','Intel (QuickSync)','CPU (Software)'],
+        src: 'gpu.hw_decoding' }
+    }
+  },
+  disks: {
+    label: 'Disks',
+    fields: {
+      ignored: { label: 'Ignored Disks', type: 'disk_chips', src: 'disks.ignored' }
+    }
+  },
+  integrations: {
+    label: 'Plex & Arr Apps',
+    fields: {
+      plex_url: { label: 'Plex URL', type: 'text', src: 'integrations.plex_url' },
+      plex_token: { label: 'Plex Token', type: 'secret', src: 'integrations.plex_token' },
+      radarr_url: { label: 'Radarr URL', type: 'text', src: 'integrations.radarr_url' },
+      radarr_api_key: { label: 'Radarr API Key', type: 'secret', src: 'integrations.radarr_api_key' },
+      sonarr_url: { label: 'Sonarr URL', type: 'text', src: 'integrations.sonarr_url' },
+      sonarr_api_key: { label: 'Sonarr API Key', type: 'secret', src: 'integrations.sonarr_api_key' },
+      test_connections: { label: 'Test Connections', type: 'integration_tests' }
+    }
+  },
+  output: {
+    label: 'Output',
+    // The user's output contract, simplified: container + overall
+    // preset + codec choices + per-output selection (language/subs).
+    // Video tuning details (resolution, HDR) live in Video Processing;
+    // audio tuning details (max channels, bitrates) live in Audio
+    // Tuning — this section is just the high-level "what kind of
+    // output?" answers.
+    fields: {
+      output_container: { label: 'Output Container', type: 'select',
+        options: ['auto','mkv','mp4'],
+        labels: ['Auto (smart per source)','Always MKV','Always MP4'],
+        src: 'general.output_container' },
+      preset: { label: 'Quality Preset', type: 'select',
+        options: ['fast','balanced','transparent','custom'],
+        labels: ['Fast (lower quality, fastest)','Balanced (good quality + speed)','Transparent (highest quality, slowest)','Custom (advanced fields below)'],
+        src: 'gpu.preset' },
+      target_codec: { label: 'Target Video Codec', type: 'select',
+        options: ['h264','hevc','av1'],
+        labels: ['H.264','HEVC (H.265)','AV1'],
+        src: 'gpu.target_codec' },
+      audio_codec: { label: 'Target Audio Codec', type: 'select',
+        options: ['aac','ac3','eac3','opus'],
+        labels: ['AAC','AC3 (Dolby Digital)','EAC3 (Dolby Digital Plus)','Opus'],
+        src: 'audio.codec' },
+      // Language + Subtitles live here because they're per-output
+      // selection choices, not encoder internals. The `mirror` property
+      // syncs audio.sub_language to the same value silently so the
+      // backend still has two keys but the user only sets one.
+      language: { label: 'Preferred Language', type: 'select',
+        options: ['eng','spa','fre','ger','ita','jpn','kor','por','rus','zho'],
+        labels: ['English','Spanish','French','German','Italian','Japanese','Korean','Portuguese','Russian','Chinese'],
+        src: 'audio.language',
+        mirror: 'audio.sub_language' },
+      subtitle_mode: { label: 'Subtitles', type: 'select',
+        options: ['copy_matching','copy_all','strip_all'],
+        labels: ['Copy Matching Language','Pass Through','Strip'],
+        src: 'general.subtitle_mode' }
+    }
+  },
+  video_processing: {
+    label: 'Video Processing',
+    // Video-specific processing: the non-preset knobs (resolution
+    // ceiling, HDR handling mode) plus the advanced encoder tuning
+    // that the Quality Preset in Output drives. Preset-controlled
+    // fields (quality_tier, encoder_speed, extras, film_grain) stay
+    // visible so users see what the preset is applying, greyed out
+    // until preset=custom.
+    fields: {
+      resolution: { label: 'Max Resolution', type: 'resolution', options: [
+        { label: '720p', width: 1280, height: 720 },
+        { label: '1080p', width: 1920, height: 1080 },
+        { label: '1440p', width: 2560, height: 1440 },
+        { label: '4K', width: 3840, height: 2160 }
+      ], src: 'gpu' },
+      // HDR Handling gating reads configData.gpu.target_codec directly,
+      // so the gate still works with target_codec now in Output (no
+      // visual adjacency needed — the codec lookup is by key, not DOM
+      // position).
+      hdr_handling: { label: 'HDR Handling', type: 'select',
+        options: ['auto','preserve','tonemap'],
+        labels: ['Auto (preserve if 10-bit target, else tonemap)',
+                 'Preserve (fail if target is 8-bit)',
+                 'Tonemap (always convert HDR → BT.709 SDR)'],
+        src: 'gpu.hdr_handling' },
+      quality_tier: { label: 'Quality Tier', type: 'select',
+        options: ['transparent','excellent','good','fast'],
+        labels: ['Transparent','Excellent','Good','Fast'],
+        src: 'gpu.quality_tier' },
+      encoder_speed: { label: 'Encoder Speed', type: 'select',
+        options: ['slowest','slower','slow','medium','fast','faster','fastest'],
+        labels: ['Slowest','Slower','Slow','Medium','Fast','Faster','Fastest'],
+        src: 'gpu.encoder_speed' },
+      nvenc_extras: { label: 'NVENC Quality Extras', type: 'toggle', src: 'gpu.nvenc_extras' },
+      qsv_extras: { label: 'QSV Quality Extras', type: 'toggle', src: 'gpu.qsv_extras' },
+      // HEVC UHQ Tune — opt-in for hevc_nvenc only. Shifts CQ ladder
+      // +7 to match `hq` subjective quality at higher numeric CQ.
+      // Auto-hidden when target_codec != hevc or hw_decoding != cuda
+      // (see gating block below); no effect on h264_nvenc / av1_nvenc.
+      hevc_uhq_tune: { label: 'HEVC UHQ Tune (+quality / +VRAM / +7 CQ)', type: 'toggle', src: 'gpu.hevc_uhq_tune' },
+      film_grain: { label: 'AV1 Film Grain', type: 'select', options: [0,4,8,16,32],
+        labels: ['Off','Subtle (4)','Default (8)','Heavy (16)','Maximum (32)'],
+        src: 'gpu.film_grain' }
+    }
+  },
+  audio_tuning: {
+    label: 'Audio Tuning',
+    // Audio-specific tuning: max channel cap (non-preset, depends on
+    // audio codec) plus per-channel-count bitrate overrides. Bitrate
+    // fields are preset-controlled — greyed out to show what the
+    // selected preset applies for the chosen target audio codec.
+    fields: {
+      max_channels: { label: 'Max Audio Channels', type: 'dynamic_select', depends: 'audio.codec',
+        presets: {
+          aac:  { options: [2,6,8], labels: ['Stereo (2.0)','Surround (5.1)','Surround (7.1)'] },
+          ac3:  { options: [2,6],   labels: ['Stereo (2.0)','Surround (5.1) — AC3 max'] },
+          eac3: { options: [2,6,8], labels: ['Stereo (2.0)','Surround (5.1)','Surround (7.1)'] },
+          opus: { options: [2,6,8], labels: ['Stereo (2.0)','Surround (5.1)','Surround (7.1)'] }
+        }, src: 'audio.max_channels' },
+      bitrate_mono: { label: 'Mono Bitrate', type: 'select',
+        options: ['','64k','80k','96k','128k'],
+        labels: ['Default','64 kbps','80 kbps','96 kbps','128 kbps'],
+        src: 'audio.bitrate_mono' },
+      bitrate_stereo: { label: 'Stereo Bitrate', type: 'select',
+        options: ['','96k','128k','192k','256k'],
+        labels: ['Default','96 kbps','128 kbps','192 kbps','256 kbps'],
+        src: 'audio.bitrate_stereo' },
+      bitrate_surround_51: { label: '5.1 Surround Bitrate', type: 'select',
+        options: ['','320k','384k','448k','512k'],
+        labels: ['Default','320 kbps','384 kbps','448 kbps','512 kbps'],
+        src: 'audio.bitrate_surround_51' },
+      bitrate_surround_71: { label: '7.1 Surround Bitrate', type: 'select',
+        options: ['','384k','448k','512k','576k','640k','768k'],
+        labels: ['Default','384 kbps','448 kbps','512 kbps','576 kbps','640 kbps','768 kbps'],
+        src: 'audio.bitrate_surround_71' }
+    }
+  },
+  concurrency: {
+    label: 'Concurrency',
+    // Throughput controls — worker pool sizing plus the per-disk
+    // streams cap. streams_per_disk is concurrency, not storage policy:
+    // users tune it to protect individual spindles from thrash rather
+    // than to police free space.
+    fields: {
+      gpu_workers: { label: 'GPU Workers', type: 'select', options: [1,2,4,6,8,10,12,16,18], src: 'gpu.workers' },
+      cpu_workers: { label: 'CPU Workers', type: 'select', options: [1,2,4,6,8,10,12,16], src: 'audio.workers' },
+      probe_workers: { label: 'File Probe Workers', type: 'select', options: [4,8,16,32], src: 'pipeline.validate_workers' },
+      disk_workers: { label: 'Disk Resolver Workers', type: 'select', options: [4,8,16,32], src: 'pipeline.wrangler_workers' },
+      streams_per_disk: { label: 'Max Concurrent Jobs Per Disk', type: 'select', options: [1,2,3,4,5,6], src: 'general.streams_per_disk' }
+    }
+  },
+  storage: {
+    label: 'Storage',
+    // SSD temp-pool controls are
+    // rendered conditionally:
+    //   - If API status reports tmp_dir_available=false (no mount),
+    //     all temp-pool fields are hidden entirely.
+    //   - If tmp_dir_enabled=false, path, pool limit, and retry cap are hidden but
+    //     the toggle stays visible so the user can flip it on.
+    fields: {
+      disk_warn_kb: { label: 'Destination Disk Min Free (GB)', type: 'select', options: [5,10,20,50], scale: 1048576, src: 'space.disk_warn_kb' },
+      dest_retry_timeout: { label: 'Destination Disk Retry Cap', type: 'select', options: [0,300,600,1800,3600], labels: ['Retry Forever','5 min','10 min','30 min','1 hour'], src: 'space.dest_retry_timeout' },
+      check_interval: { label: 'Space Check Interval', type: 'select', options: [10,15,30,60,120], labels: ['10 sec','15 sec','30 sec','1 min','2 min'], src: 'space.check_interval' },
+      tmp_dir_enabled: { label: 'Use SSD Temp Pool', type: 'toggle', src: 'space.tmp_dir_enabled' },
+      tmp_dir_path: { label: 'SSD Temp Pool Path', type: 'readonly_status', statusKey: 'tmp_dir_path' },
+      tmp_max_kb: { label: 'SSD Temp Pool Limit (GB)', type: 'number', scale: 1048576, src: 'space.tmp_max_kb' },
+      ssd_retry_timeout: { label: 'SSD Temp Pool Retry Cap', type: 'select', options: [0,300,600,1800,3600], labels: ['Retry Forever','5 min','10 min','30 min','1 hour'], src: 'space.ssd_retry_timeout' }
+    }
+  },
+  diagnostics: {
+    label: 'Diagnostics',
+    // Test-mode / observability toggles. Not lifecycle or operational —
+    // these change what the worker emits or whether it actually writes
+    // to disk. Separated from General so users don't confuse "start
+    // paused" (lifecycle) with "dry run" (test mode).
+    fields: {
+      stderr_logging: { label: 'Store Failed Encode Logs', type: 'toggle', src: 'general.stderr_logging' },
+      flag_short_radarr_runtime: { label: 'Flag Radarr Movies Under 1 Hour', type: 'toggle', src: 'general.flag_short_radarr_runtime' },
+      // Dry Run — writes output as .replace.tmp next to source and
+      // skips the mv that would replace the original. Transcode +
+      // validation still run. Lets you compare source/output before
+      // committing. Tracked in /state/almosthome-copies.tsv. .job files
+      // are preserved so you can toggle back to real after review.
+      dry_run: { label: 'Dry Run (keep .tmp, don\'t replace original)', type: 'toggle', src: 'general.dry_run' }
+    }
+  },
+  failure_policy: {
+    label: 'Failure Policies',
+    fields: {
+      enabled: { label: 'Enable Failure Policy Runner', type: 'toggle', src: 'failure_policy.enabled' },
+      dry_run: { label: 'Policy Dry Run', type: 'toggle', src: 'failure_policy.dry_run' },
+      rules: { label: 'Bad File Cleanup', type: 'policy_rules' },
+      policy_status: { label: 'Policy Status', type: 'policy_status' }
+    }
+  },
+  language: {
+    label: 'Language Processing',
+    // Opt-in audio-language detection. Restart-applied: enabling +
+    // changing knobs flips the restart banner (language is included in
+    // the restart-required comparison). The device dropdown is gated by
+    // the capability probe (capabilities.lang_backend). min_confidence
+    // uses the float-safe lang_confidence renderer — the generic select
+    // renderer parseInt-coerces "0.85" to 0 and breaks the verdict gate.
+    // The re-scan button releases the existing no_eng_audio backlog and
+    // is only meaningful after enabling AND restarting (the lang_detect
+    // pool must be running to consume diverted items).
+    fields: {
+      enabled: { label: 'Enable Language Detection', type: 'toggle', src: 'language.enabled' },
+      device: { label: 'Detection Device', type: 'lang_device', src: 'language.device' },
+      workers: { label: 'Detection Workers', type: 'select', options: [1,2,3,4], src: 'language.workers' },
+      model_dir: { label: 'Model Folder', type: 'lang_model_dir', src: 'language.model_dir' },
+      model: { label: 'Whisper Model', type: 'lang_model', src: 'language.model' },
+      sample_coverage_pct: { label: 'Coverage', type: 'select', options: [5,10,20], labels: ['5% Fast','10% Balanced','20% Deep'], src: 'language.sample_coverage_pct' },
+      min_confidence: { label: 'Min Confidence', type: 'lang_confidence', options: [0.7,0.8,0.85,0.9,0.95], src: 'language.min_confidence' },
+      lang_rescan: { label: 'Re-scan language failures', type: 'action', action: 'lang_rescan' }
+    }
+  },
+  maintenance: {
+    label: 'Maintenance',
+    fields: {
+      clear_cache_rescan: { label: 'Clear Cache & Rescan', type: 'action', action: 'rescan' },
+      policy_run_now: { label: 'Run Failure Policies Now', type: 'action', action: 'policy_run' }
+    }
+  }
+};
+
+function normalizeConfig(data) {
+  data = data || {};
+  data.general = data.general || {};
+  if (data.general.flag_short_radarr_runtime === undefined) {
+    data.general.flag_short_radarr_runtime = false;
+  }
+  data.disks = data.disks || {};
+  data.disks.ignored = diskCsv(parseDiskCsv(data.disks.ignored || ''));
+  data.integrations = data.integrations || {};
+  if (data.integrations.plex_url === undefined) data.integrations.plex_url = '';
+  if (data.integrations.plex_token === undefined) data.integrations.plex_token = '';
+  if (data.integrations.plex_movie_section_id === undefined) data.integrations.plex_movie_section_id = 1;
+  if (data.integrations.plex_tv_section_id === undefined) data.integrations.plex_tv_section_id = 2;
+  if (data.integrations.plex_movie_path_root === undefined) data.integrations.plex_movie_path_root = '/movies';
+  if (data.integrations.plex_tv_path_root === undefined) data.integrations.plex_tv_path_root = '/tv';
+  if (data.integrations.radarr_url === undefined) data.integrations.radarr_url = '';
+  if (data.integrations.radarr_api_key === undefined) data.integrations.radarr_api_key = '';
+  if (data.integrations.sonarr_url === undefined) data.integrations.sonarr_url = '';
+  if (data.integrations.sonarr_api_key === undefined) data.integrations.sonarr_api_key = '';
+  data.space = data.space || {};
+  var legacyRetry = data.space.retry_timeout;
+  if (data.space.dest_retry_timeout === undefined) {
+    data.space.dest_retry_timeout = legacyRetry !== undefined ? legacyRetry : 0;
+  }
+  if (data.space.ssd_retry_timeout === undefined) {
+    data.space.ssd_retry_timeout = legacyRetry !== undefined ? legacyRetry : 0;
+  }
+  data.failure_policy = data.failure_policy || {};
+  if (data.failure_policy.enabled === undefined) data.failure_policy.enabled = false;
+  if (data.failure_policy.dry_run === undefined) data.failure_policy.dry_run = false;
+  data.failure_policy.rules = data.failure_policy.rules || {};
+  data.language = data.language || {};
+  if (data.language.enabled === undefined) data.language.enabled = false;
+  if (data.language.device === undefined) data.language.device = 'auto';
+  if (data.language.workers === undefined) data.language.workers = 2;
+  if (data.language.model === undefined) data.language.model = 'base';
+  if (data.language.model_dir === undefined) data.language.model_dir = '/models';
+  if (data.language.min_confidence === undefined) data.language.min_confidence = 0.85;
+  if (data.language.sample_coverage_pct === undefined) data.language.sample_coverage_pct = 10;
+  if (data.language.samples === undefined) data.language.samples = 3;
+  if (data.language.sample_sec === undefined) data.language.sample_sec = 90;
+  if (data.language.head_skip === undefined) data.language.head_skip = 60;
+  if (data.language.tail_skip === undefined) data.language.tail_skip = 60;
+  function ensurePolicyRule(ruleId, defaults) {
+    data.failure_policy.rules[ruleId] = data.failure_policy.rules[ruleId] || {};
+    var rule = data.failure_policy.rules[ruleId];
+    if (rule.enabled === undefined) rule.enabled = defaults.enabled;
+    if (defaults.failure_class !== undefined && rule.failure_class === undefined) rule.failure_class = Array.isArray(defaults.failure_class) ? defaults.failure_class.slice() : defaults.failure_class;
+    if (defaults.match !== undefined && rule.match === undefined) rule.match = defaults.match;
+    if (defaults.destructive !== undefined && rule.destructive === undefined) rule.destructive = defaults.destructive;
+    if (defaults.preview !== undefined && rule.preview === undefined) rule.preview = defaults.preview;
+    if (!rule.actions) rule.actions = defaults.actions.slice();
+  }
+
+  ensurePolicyRule('commentary_only', {
+    enabled: true,
+    failure_class: 'policy_skip',
+    destructive: true,
+    actions: ['arr_blocklist', 'delete_file', 'arr_rescan']
+  });
+  ensurePolicyRule('wrong_language_policy_skip', {
+    enabled: false,
+    preview: true,
+    failure_class: 'policy_skip',
+    match: { reason_prefix: 'wrong_lang_' },
+    destructive: true,
+    actions: ['arr_blocklist', 'delete_file', 'arr_rescan']
+  });
+  ensurePolicyRule('missing_preferred_audio_policy_skip', {
+    enabled: false,
+    preview: true,
+    failure_class: 'policy_skip',
+    match: { reason_prefix: 'no_', reason_suffix: '_audio' },
+    destructive: true,
+    actions: ['arr_blocklist', 'delete_file', 'arr_rescan']
+  });
+  ensurePolicyRule('input_invalid', {
+    enabled: false,
+    failure_class: 'input_invalid',
+    destructive: true,
+    actions: ['arr_blocklist', 'delete_file', 'arr_rescan']
+  });
+  ensurePolicyRule('corrupt_source', {
+    enabled: false,
+    failure_class: ['corrupt_input', 'mkv_corrupt', 'dts_non_monotonic', 'illegal_reordering'],
+    destructive: true,
+    actions: ['arr_blocklist', 'delete_file', 'arr_rescan']
+  });
+  ensurePolicyRule('validation_duration_mismatch', {
+    enabled: true,
+    failure_class: 'validation_failure',
+    match: { reason: 'validation_duration_mismatch' },
+    destructive: false,
+    actions: ['record_diagnostic', 'mark_needs_review']
+  });
+  ensurePolicyRule('validation_failure', {
+    enabled: true,
+    failure_class: 'validation_failure',
+    destructive: false,
+    actions: ['record_diagnostic', 'mark_needs_review']
+  });
+  ensurePolicyRule('stream_map_invalid', {
+    enabled: true,
+    failure_class: 'stream_map_invalid',
+    destructive: false,
+    actions: ['record_diagnostic', 'mark_needs_review']
+  });
+  ensurePolicyRule('config_error', {
+    enabled: true,
+    failure_class: 'config_error',
+    destructive: false,
+    actions: ['record_diagnostic', 'mark_needs_review']
+  });
+  ensurePolicyRule('worker_crash', {
+    enabled: true,
+    failure_class: 'worker_crash',
+    destructive: false,
+    actions: ['record_diagnostic', 'mark_needs_review']
+  });
+  ensurePolicyRule('output_missing', {
+    enabled: true,
+    failure_class: 'output_missing',
+    destructive: false,
+    actions: ['record_diagnostic', 'mark_needs_review']
+  });
+  ensurePolicyRule('environment', {
+    enabled: true,
+    failure_class: ['input_missing', 'quarantine', 'quarantine_failed', 'disk_full', 'permission_denied', 'file_not_found', 'out_of_memory', 'encoder_open_failed', 'hw_init_failed', 'codec_not_supported', 'filter_format_mismatch', 'filter_reinit_failed', 'no_packets_written', 'mux_queue_overflow', 'container_limit', 'subtitle_incompatible', 'conversion_failed'],
+    destructive: false,
+    actions: ['record_diagnostic', 'mark_needs_review']
+  });
+  ensurePolicyRule('unknown', {
+    enabled: true,
+    failure_class: 'unknown',
+    destructive: false,
+    actions: ['record_diagnostic', 'mark_needs_review']
+  });
+  return data;
+}
+
+function getConfigPath(path) {
+  var parts = (path || '').split('.');
+  var cur = configData;
+  for (var i = 0; i < parts.length; i++) {
+    if (!cur || cur[parts[i]] === undefined) return undefined;
+    cur = cur[parts[i]];
+  }
+  return cur;
+}
+
+function setConfigPath(path, value) {
+  var parts = (path || '').split('.');
+  var cur = configData;
+  for (var i = 0; i < parts.length - 1; i++) {
+    if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+    cur = cur[parts[i]];
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+
+function cleanupRuleEnabled(ruleId) {
+  return getConfigPath('failure_policy.rules.' + ruleId + '.enabled') === true &&
+    getConfigPath('failure_policy.rules.' + ruleId + '.destructive') === true;
+}
+
+function setBadFileCleanup(ruleId, enabled) {
+  var destructiveActions = ['arr_blocklist', 'delete_file', 'arr_rescan'];
+  setConfigPath('failure_policy.rules.' + ruleId + '.enabled', enabled);
+  setConfigPath('failure_policy.rules.' + ruleId + '.destructive', true);
+  setConfigPath('failure_policy.rules.' + ruleId + '.actions', destructiveActions.slice());
+}
+
+function loadConfig() {
+  fetch('/api/config')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      configData = normalizeConfig(data);
+      renderSettings();
+    })
+    .catch(function() {});
+}
+
+function settingsInputHasFocus() {
+  var container = document.getElementById('settingsContent');
+  var active = document.activeElement;
+  if (!container || !active || !container.contains(active)) return false;
+  var tag = (active.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'button';
+}
+
+function renderSettingsIfIdle() {
+  if (settingsInputHasFocus()) return false;
+  renderSettings();
+  return true;
+}
+
+function renderSettings() {
+  var el = document.getElementById('settingsContent');
+  el.innerHTML = '';
+  // Iterate schema declaration order (JS preserves insertion order for
+  // string keys). Adding or renaming a section in `settingsSchema` is
+  // sufficient — no need to maintain a parallel ordering array.
+  var groups = Object.keys(settingsSchema);
+  for (var g = 0; g < groups.length; g++) {
+    var groupKey = groups[g];
+    var schema = settingsSchema[groupKey];
+    if (!schema) continue;
+
+    var section = document.createElement('div');
+    section.className = 'settings-group';
+    section.innerHTML = '<div class="settings-group-title">' + esc(schema.label) + '</div>';
+
+    var fields = Object.keys(schema.fields);
+    for (var f = 0; f < fields.length; f++) {
+      var fieldKey = fields[f];
+      var field = schema.fields[fieldKey];
+      // Support cross-group references via src: "group.key" or nested
+      // paths such as "failure_policy.rules.commentary_only.enabled".
+      var srcGroup = groupKey, srcField = fieldKey;
+      var srcPath = field.src || (groupKey + '.' + fieldKey);
+      if (field.src) { var parts = field.src.split('.'); srcGroup = parts[0]; srcField = parts[1]; }
+      var val = getConfigPath(srcPath);
+      // `resolution` has no single val (width+height pair from the same
+      // group) and `readonly_status` reads its value from lastStatus
+      // rather than configData — both skip the undefined-val guard.
+      if (val === undefined && field.type !== 'resolution' && field.type !== 'readonly_status' && field.type !== 'action' && field.type !== 'policy_status' && field.type !== 'integration_tests' && field.type !== 'policy_rules') continue;
+      // When a preset is active and this field is preset-controlled, display
+      // the preset's effective value (not the user's stored override) so
+      // users see what the worker will actually apply.
+      var presetEff = getPresetEffective(fieldKey);
+      var isPresetLocked = (presetEff !== undefined);
+      if (isPresetLocked) val = presetEff;
+      var row = document.createElement('div');
+      row.className = 'setting-row';
+
+      if (isPresetLocked) {
+        // Render as static value — the worker uses the preset's value, so
+        // showing it as an interactive control is misleading (and dropdown
+        // options often don't include the preset's exact value).
+        var displayText;
+        if (field.type === 'toggle') {
+          displayText = (val === true || val === 'true') ? 'On' : 'Off';
+        } else if (field.type === 'select' && field.labels) {
+          var idx = field.options.indexOf(val);
+          if (idx === -1) idx = field.options.map(String).indexOf(String(val));
+          displayText = (idx >= 0 && field.labels[idx]) ? field.labels[idx] : String(val);
+        } else {
+          displayText = String(val);
+        }
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<span class="setting-readonly">' + esc(displayText) + '</span>';
+      } else if (field.type === 'action') {
+        var btnId = field.action === 'rescan' ? ' id="rescanBtn"' :
+          (field.action === 'policy_run' ? ' id="policyRunBtn"' :
+          (field.action === 'lang_rescan' ? ' id="langRescanBtn"' : ''));
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<button class="panel-action-btn"' + btnId + ' data-action="' + esc(field.action) + '">' + esc(field.label) + '</button>';
+        row.querySelector('button').onclick = function() {
+          var action = this.getAttribute('data-action');
+          if (action === 'rescan') rescanQueue();
+          if (action === 'policy_run') runFailurePoliciesNow();
+          if (action === 'lang_rescan') langRescan();
+          if (action.indexOf('test_') === 0) testIntegration(action.replace('test_', ''), this);
+        };
+      } else if (field.type === 'integration_tests') {
+        row.classList.add('integration-test-row');
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<div class="integration-test-buttons">' +
+          '<button class="panel-action-btn integration-test-btn failed" data-integration-app="plex">Plex</button>' +
+          '<button class="panel-action-btn integration-test-btn failed" data-integration-app="radarr">Radarr</button>' +
+          '<button class="panel-action-btn integration-test-btn failed" data-integration-app="sonarr">Sonarr</button>' +
+          '</div>';
+        var testBtns = row.querySelectorAll('.integration-test-btn');
+        for (var tb = 0; tb < testBtns.length; tb++) {
+          testBtns[tb].onclick = function() {
+            testIntegration(this.getAttribute('data-integration-app'), this);
+          };
+        }
+      } else if (field.type === 'policy_status') {
+        var counts = failurePolicyStatus && failurePolicyStatus.counts ? failurePolicyStatus.counts : {};
+        var total = failurePolicyStatus && failurePolicyStatus.total !== undefined ? failurePolicyStatus.total : 0;
+        var statusText = 'Total ' + total +
+          ' · complete ' + (counts.complete || 0) +
+          ' · blocked ' + (counts.blocked || 0) +
+          ' · dry-run ' + (counts.dry_run || 0);
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<span class="setting-readonly">' + esc(statusText) + '</span>';
+      } else if (field.type === 'policy_rules') {
+        var cleanupRuleIds = [
+          'commentary_only',
+          'wrong_language_policy_skip',
+          'missing_preferred_audio_policy_skip',
+          'input_invalid',
+          'corrupt_source'
+        ];
+        var ruleIds = cleanupRuleIds;
+        var labels = {
+          commentary_only: 'Commentary-only audio (source)',
+          wrong_language_policy_skip: 'Wrong-language audio (source)',
+          missing_preferred_audio_policy_skip: 'Missing preferred audio (source)',
+          input_invalid: 'Invalid source — empty / no audio',
+          corrupt_source: 'Corrupt download'
+        };
+        row.className = 'policy-rule-list';
+        var html = '';
+        for (var pr = 0; pr < ruleIds.length; pr++) {
+          var rid = ruleIds[pr];
+          var dePath = 'failure_policy.rules.' + rid + '.destructive';
+          html += '<div class="setting-row"><span class="setting-label">' + esc(labels[rid] || rid) + '</span>' +
+            '<span class="policy-rule-toggles">delete+blacklist <button class="setting-toggle' + (cleanupRuleEnabled(rid) ? ' on' : '') + '" data-path="' + esc(dePath) + '"></button></span></div>';
+        }
+        row.innerHTML = html;
+        var prToggles = row.querySelectorAll('.setting-toggle');
+        for (var pt = 0; pt < prToggles.length; pt++) {
+          prToggles[pt].onclick = function() {
+            var path = this.getAttribute('data-path');
+            var rid = path.split('.')[2];
+            var newVal = !cleanupRuleEnabled(rid);
+            setBadFileCleanup(rid, newVal);
+            this.className = 'setting-toggle' + (newVal ? ' on' : '');
+            if (newVal && getConfigPath('failure_policy.dry_run') !== true) {
+              setConfigPath('failure_policy.dry_run', true);
+              saveConfig().then(function() {
+                renderSettings();
+                alert('Destructive rule armed — Dry Run was turned ON so you can preview before anything is deleted. Turn Dry Run off to go live.');
+              });
+              return;
+            }
+            saveConfig();
+          };
+        }
+      } else if (field.type === 'toggle') {
+        var isOn = val === true || val === 'true';
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<button class="setting-toggle' + (isOn ? ' on' : '') + '" data-path="' + esc(srcPath) + '" data-field="' + esc(srcField) + '"></button>';
+        row.querySelector('.setting-toggle').onclick = function() {
+          var path = this.getAttribute('data-path');
+          var fld = this.getAttribute('data-field');
+          setConfigPath(path, !getConfigPath(path));
+          this.className = 'setting-toggle' + (getConfigPath(path) ? ' on' : '');
+          saveConfig();
+          // Re-render when this toggle gates other fields (tmp_dir_enabled
+          // controls visibility of tmp_dir_path + tmp_max_kb).
+          if (fld === 'tmp_dir_enabled') renderSettings();
+        };
+      } else if (field.type === 'disk_chips') {
+        var selectedDisks = parseDiskCsv(val);
+        var selectedMap = {};
+        selectedDisks.forEach(function(disk) { selectedMap[disk] = true; });
+        var diskOptions = settingsDiskOptions(selectedDisks);
+        var chipHtml = '';
+        if (diskOptions.length === 0) {
+          chipHtml = '<span class="disk-chip-empty">No disks detected</span>';
+        } else {
+          for (var di = 0; di < diskOptions.length; di++) {
+            var opt = diskOptions[di];
+            var activeCls = selectedMap[opt.disk] ? ' active' : '';
+            var missingCls = opt.mounted ? '' : ' missing';
+            var label = opt.disk + (opt.mounted ? '' : ' (not mounted)');
+            chipHtml += '<button class="disk-chip' + activeCls + missingCls + '" data-group="' + srcGroup + '" data-field="' + srcField + '" data-disk="' + esc(opt.disk) + '" title="' + esc(label) + '">' + esc(label) + '</button>';
+          }
+        }
+        row.classList.add('disk-chip-row');
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<div class="disk-chip-list">' + chipHtml + '</div>';
+        var chips = row.querySelectorAll('.disk-chip');
+        for (var ci = 0; ci < chips.length; ci++) {
+          chips[ci].onclick = function() {
+            var grp = this.getAttribute('data-group');
+            var fld = this.getAttribute('data-field');
+            var disk = this.getAttribute('data-disk');
+            var cur = parseDiskCsv(configData[grp][fld]);
+            var idx = cur.indexOf(disk);
+            if (idx === -1) cur.push(disk);
+            else cur.splice(idx, 1);
+            configData[grp][fld] = diskCsv(cur);
+            renderSettings();
+            saveConfig({ liveDiskIgnored: true });
+          };
+        }
+      } else if (field.type === 'text' || field.type === 'secret') {
+        var secretClass = field.type === 'secret' ? ' secret-input' : '';
+        var secretAttrs = field.type === 'secret'
+          ? ' data-form-type="other" autocapitalize="off" autocorrect="off" spellcheck="false"'
+          : ' spellcheck="false"';
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<input class="setting-input' + secretClass + '" type="text" value="' + esc(String(val || '')) + '" data-path="' + esc(srcPath) + '" autocomplete="off"' + secretAttrs + '>';
+        row.querySelector('.setting-input').onchange = function() {
+          var path = this.getAttribute('data-path');
+          setConfigPath(path, this.value);
+          saveConfig();
+        };
+      } else if (field.type === 'number') {
+        var scale = field.scale || 1;
+        var displayVal = scale > 1 ? Math.round(val / scale) : val;
+        var displayText = (displayVal === undefined || displayVal === null) ? '' : displayVal;
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<input class="setting-input" type="number" value="' + esc(String(displayText)) + '" data-group="' + srcGroup + '" data-field="' + srcField + '" data-scale="' + scale + '">';
+        row.querySelector('.setting-input').onchange = function() {
+          var grp = this.getAttribute('data-group');
+          var fld = this.getAttribute('data-field');
+          var sc = parseInt(this.getAttribute('data-scale')) || 1;
+          configData[grp][fld] = (parseInt(this.value) || 0) * sc;
+          saveConfig();
+        };
+      } else if (field.type === 'select') {
+        var scale = field.scale || 1;
+        var displayVal = scale > 1 ? Math.round(val / scale) : val;
+        // Capability-gated options (filters target_codec per hw_decoding).
+        var effOpts = getEffectiveOptions(fieldKey, field);
+        var opts = '';
+        for (var o = 0; o < effOpts.options.length; o++) {
+          var optVal = effOpts.options[o];
+          var optLabel = effOpts.labels[o] || String(optVal);
+          var selected = String(optVal) === String(displayVal) ? ' selected' : '';
+          opts += '<option value="' + esc(String(optVal)) + '"' + selected + '>' + esc(optLabel) + '</option>';
+        }
+        // Mirror: when a field sets `mirror: 'group.field'`, every change
+        // writes the same value to that secondary config path. Used to
+        // keep `audio.sub_language` synced to `audio.language` without
+        // surfacing a second picker to the user.
+        var mirrorAttrs = '';
+        if (field.mirror) {
+          var mirParts = field.mirror.split('.');
+          mirrorAttrs = ' data-mirror-group="' + esc(mirParts[0]) + '" data-mirror-field="' + esc(mirParts[1]) + '"';
+        }
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<select class="setting-input" data-group="' + srcGroup + '" data-field="' + srcField + '" data-scale="' + scale + '"' + mirrorAttrs + '>' + opts + '</select>';
+        row.querySelector('.setting-input').onchange = function() {
+          var grp = this.getAttribute('data-group');
+          var fld = this.getAttribute('data-field');
+          var sc = parseInt(this.getAttribute('data-scale')) || 1;
+          var raw = this.value;
+          // Empty string MUST short-circuit before isNaN — Number("") is 0,
+          // so isNaN("") is false and we'd run parseInt("")*sc = NaN, which
+          // JSON.stringify serializes as `null`. That polluted bitrate_*
+          // fields when the user picked the "Default" option.
+          var parsed = (raw === '') ? '' : (isNaN(raw) ? raw : parseInt(raw) * sc);
+          configData[grp][fld] = parsed;
+
+          // Mirror-write: replicate the same value to a secondary config
+          // path if the schema declared a `mirror:` (attrs emitted above).
+          var mGrp = this.getAttribute('data-mirror-group');
+          var mFld = this.getAttribute('data-mirror-field');
+          if (mGrp && mFld && configData[mGrp]) {
+            configData[mGrp][mFld] = parsed;
+          }
+
+          // ── ALL derived mutations happen BEFORE the single saveConfig. ──
+          // saveConfig is fire-and-forget (async fetch), so issuing two
+          // POSTs in a row races: the earlier snapshot can land after
+          // the later one and overwrite the cleaned state with the
+          // pre-cleanup version. Previous implementation wrote once
+          // after `configData[grp][fld] = parsed`, then again after
+          // applyPresetToConfig / bitrate re-scoping — order of arrival
+          // at the backend was not guaranteed. Collapse to a single
+          // POST carrying the final, fully-derived state.
+
+          // Preset change: mirror preset's controlled values (video +
+          // audio) into the individual config keys so config.json
+          // reflects what the worker applies at runtime.
+          if (fld === 'preset' && grp === 'gpu') {
+            applyPresetToConfig();
+          }
+
+          // Audio codec change: cap max_channels; re-scope audio
+          // bitrates — either to the active preset's values for the
+          // new codec, or clear to empty for custom (lets the worker
+          // fall back to its balanced defaults per-codec).
+          if (fld === 'codec' && grp === 'audio') {
+            var codecMaxCh = { aac: 8, ac3: 6, eac3: 8, opus: 8 }[configData.audio.codec] || 8;
+            if ((configData.audio.max_channels || 6) > codecMaxCh) {
+              configData.audio.max_channels = codecMaxCh;
+            }
+            if (configData.gpu && configData.gpu.preset && configData.gpu.preset !== 'custom') {
+              applyPresetToConfig();
+            } else {
+              configData.audio.bitrate_mono = '';
+              configData.audio.bitrate_stereo = '';
+              configData.audio.bitrate_surround_51 = '';
+              configData.audio.bitrate_surround_71 = '';
+            }
+          }
+
+          // Cross-field invariants — must run before the single
+          // saveConfig so the derived state is part of the same POST.
+          reconcileDerivedInvariants();
+
+          // Single persist after all mutations settle.
+          saveConfig();
+
+          // Re-render when these fields change (other fields depend on them):
+          //   hw_decoding   → nvenc_extras/qsv_extras/film_grain visibility
+          //   target_codec  → film_grain visibility, AV1 warning, hdr_handling gating
+          //   preset        → grey-out of preset-controlled fields
+          //   codec (audio) → max_channels dynamic options list + bitrate rows
+          if (fld === 'hw_decoding' || fld === 'target_codec' || fld === 'preset' || fld === 'codec') renderSettings();
+        };
+      } else if (field.type === 'lang_device') {
+        var langBackend = capabilities && capabilities.lang_backend ? String(capabilities.lang_backend) : '';
+        var devOpts = [];
+        if (langBackend && langBackend !== 'cpu') {
+          devOpts.push({
+            value: langBackend,
+            label: capabilities.lang_device_label || langBackend.toUpperCase()
+          });
+        }
+        devOpts.push({ value: 'cpu', label: 'CPU' });
+        var selectedDevice = (!val || val === 'auto') ? defaultLangDevice() : String(val);
+        var hasSelectedDevice = false;
+        for (var ds = 0; ds < devOpts.length; ds++) {
+          if (String(devOpts[ds].value) === selectedDevice) hasSelectedDevice = true;
+        }
+        if (!hasSelectedDevice && selectedDevice !== 'cpu') {
+          devOpts.unshift({ value: selectedDevice, label: selectedDevice.toUpperCase() + ' (configured)' });
+        }
+        var devHtml = '';
+        for (var dv = 0; dv < devOpts.length; dv++) {
+          var dsel = String(devOpts[dv].value) === selectedDevice ? ' selected' : '';
+          devHtml += '<option value="' + esc(String(devOpts[dv].value)) + '"' + dsel + '>' + esc(String(devOpts[dv].label)) + '</option>';
+        }
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<select class="setting-input" data-path="' + esc(srcPath) + '">' + devHtml + '</select>';
+        row.querySelector('.setting-input').onchange = function() {
+          setConfigPath(this.getAttribute('data-path'), this.value);
+          saveConfig();
+        };
+      } else if (field.type === 'lang_model') {
+        var modelFolderPath = (capabilities && (capabilities.lang_model_host_dir || capabilities.lang_model_dir)) || '/models';
+        var modelNamesRaw = capabilities && capabilities.lang_models ? String(capabilities.lang_models) : '';
+        var models = modelNamesRaw ? modelNamesRaw.split(',').map(function(name) { return name.trim(); }).filter(function(name) { return name.length > 0; }) : [];
+        var selectedModel = String(val || 'base');
+        var modelHtml = '';
+        if (models.length === 0) {
+          modelHtml = '<option value="' + esc(selectedModel) + '">' + esc('No models found in ' + modelFolderPath) + '</option>';
+        } else {
+          var modelSeen = {};
+          for (var lm = 0; lm < models.length; lm++) {
+            modelSeen[models[lm]] = true;
+            var lmSel = String(models[lm]) === selectedModel ? ' selected' : '';
+            modelHtml += '<option value="' + esc(models[lm]) + '"' + lmSel + '>' + esc(models[lm]) + '</option>';
+          }
+          if (selectedModel && !modelSeen[selectedModel]) {
+            modelHtml = '<option value="' + esc(selectedModel) + '" selected>' + esc(selectedModel + ' (missing from ' + modelFolderPath + ')') + '</option>' + modelHtml;
+          }
+        }
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<select class="setting-input" data-path="' + esc(srcPath) + '"' + (models.length === 0 ? ' disabled' : '') + '>' + modelHtml + '</select>';
+        row.querySelector('.setting-input').onchange = function() {
+          setConfigPath(this.getAttribute('data-path'), this.value);
+          saveConfig();
+        };
+      } else if (field.type === 'lang_model_dir') {
+        var modelPath = langModelFolderDisplayPath();
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<span class="setting-readonly">' + esc(modelPath) + '</span>';
+      } else if (field.type === 'lang_confidence') {
+        // Float-safe confidence picker. The generic 'select' onchange
+        // (line ~1867) does parseInt(raw)*sc, which turns "0.85" into 0
+        // (isNaN("0.85") is false), silently breaking the verdict gate.
+        // This branch preserves the float via parseFloat and writes it
+        // straight to the float config key — never through parseInt*sc.
+        var cfHtml = '';
+        for (var cf = 0; cf < field.options.length; cf++) {
+          var cfVal = field.options[cf];
+          var cfSel = String(cfVal) === String(val) ? ' selected' : '';
+          cfHtml += '<option value="' + esc(String(cfVal)) + '"' + cfSel + '>' + esc(String(cfVal)) + '</option>';
+        }
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<select class="setting-input" data-path="' + esc(srcPath) + '">' + cfHtml + '</select>';
+        row.querySelector('.setting-input').onchange = function() {
+          var raw = this.value;
+          // Preserve the float. parseFloat("0.85") === 0.85; integers
+          // (e.g. "1") stay integers. Empty string short-circuits.
+          var parsed = (raw === '') ? '' : (raw.indexOf('.') !== -1 ? parseFloat(raw) : parseInt(raw, 10));
+          setConfigPath(this.getAttribute('data-path'), parsed);
+          saveConfig();
+        };
+      } else if (field.type === 'dynamic_select') {
+        // Preset list changes based on another field's value.
+        // depends: 'foo'       -> reads configData[srcGroup].foo (same group
+        //                          as this field's data, which is srcGroup when
+        //                          src: is set, else groupKey).
+        // depends: 'audio.codec' -> explicit absolute path, overrides srcGroup.
+        var dependsField = field.depends;
+        var dependsVal;
+        if (dependsField.indexOf('.') !== -1) {
+          var _depParts = dependsField.split('.');
+          dependsVal = configData[_depParts[0]] ? configData[_depParts[0]][_depParts[1]] : null;
+        } else {
+          dependsVal = configData[srcGroup] ? configData[srcGroup][dependsField] : null;
+        }
+        var presetKeys = Object.keys(field.presets);
+        var presetDef = field.presets[dependsVal] || field.presets[presetKeys[0]];
+        var opts = '';
+        for (var o = 0; o < presetDef.options.length; o++) {
+          var optVal = presetDef.options[o];
+          var optLabel = presetDef.labels ? presetDef.labels[o] : String(optVal);
+          var selected = String(optVal) === String(val) ? ' selected' : '';
+          opts += '<option value="' + esc(String(optVal)) + '"' + selected + '>' + esc(optLabel) + '</option>';
+        }
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<select class="setting-input" data-group="' + srcGroup + '" data-field="' + srcField + '">' + opts + '</select>';
+        row.querySelector('.setting-input').onchange = function() {
+          var grp = this.getAttribute('data-group');
+          var fld = this.getAttribute('data-field');
+          var raw = this.value;
+          configData[grp][fld] = (raw !== '' && !isNaN(raw)) ? parseInt(raw) : raw;
+          saveConfig();
+        };
+      } else if (field.type === 'resolution') {
+        // Combined width+height selector. Reads/writes via srcGroup
+        // (so `src: 'gpu'` lets the field sit in any schema section while
+        // its max_width/max_height stay in the gpu config group).
+        var curWidth = configData[srcGroup] ? configData[srcGroup]['max_width'] : 1920;
+        var curHeight = configData[srcGroup] ? configData[srcGroup]['max_height'] : 1080;
+        var opts = '';
+        for (var o = 0; o < field.options.length; o++) {
+          var r = field.options[o];
+          var selected = (r.width === curWidth && r.height === curHeight) ? ' selected' : '';
+          opts += '<option value="' + r.width + 'x' + r.height + '"' + selected + '>' + esc(r.label) + ' (' + r.width + 'x' + r.height + ')</option>';
+        }
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<select class="setting-input" data-group="' + srcGroup + '">' + opts + '</select>';
+        row.querySelector('.setting-input').onchange = function() {
+          var grp = this.getAttribute('data-group');
+          var parts = this.value.split('x');
+          configData[grp]['max_width'] = parseInt(parts[0]);
+          configData[grp]['max_height'] = parseInt(parts[1]);
+          saveConfig();
+        };
+      } else if (field.type === 'readonly_status') {
+        // Readonly display of a runtime-detected value from /api/status.
+        // No input, no onchange — just shows the current value so users
+        // know what the backend resolved (e.g. which temp-dir mount is
+        // active). Falls back to "(unknown)" if status hasn't arrived
+        // yet; handleStatus will re-render when it populates lastStatus.
+        var statusVal = (lastStatus && field.statusKey in lastStatus) ? lastStatus[field.statusKey] : '(unknown)';
+        row.innerHTML = '<span class="setting-label">' + esc(field.label) + '</span>' +
+          '<span class="setting-readonly">' + esc(String(statusVal)) + '</span>';
+      }
+      // Conditional visibility / state:
+      //   Preset-controlled fields stay VISIBLE but greyed-out when
+      //     preset != "custom" so users see what the preset is doing.
+      //   nvenc_extras hidden entirely when hw_decoding != cuda
+      //     (orthogonal to preset — irrelevant on wrong HW).
+      //   qsv_extras hidden when hw_decoding != qsv.
+      //   film_grain hidden when target_codec != av1 OR hw_decoding != none.
+      var presetVal = configData['gpu'] ? configData['gpu']['preset'] : 'balanced';
+      var presetControlled = ['quality_tier','encoder_speed','nvenc_extras','qsv_extras','film_grain',
+                              'bitrate_mono','bitrate_stereo','bitrate_surround_51','bitrate_surround_71'];
+      if (presetControlled.indexOf(fieldKey) !== -1 && presetVal !== 'custom') {
+        row.classList.add('preset-locked');
+      }
+      if (fieldKey === 'nvenc_extras') {
+        var hwVal = configData['gpu'] ? configData['gpu']['hw_decoding'] : '';
+        if (hwVal !== 'cuda') row.style.display = 'none';
+      }
+      if (fieldKey === 'qsv_extras') {
+        var hwVal = configData['gpu'] ? configData['gpu']['hw_decoding'] : '';
+        if (hwVal !== 'qsv') row.style.display = 'none';
+      }
+      if (fieldKey === 'film_grain') {
+        var hwVal = configData['gpu'] ? configData['gpu']['hw_decoding'] : '';
+        var codecVal = configData['gpu'] ? configData['gpu']['target_codec'] : '';
+        if (codecVal !== 'av1' || hwVal !== 'none') row.style.display = 'none';
+      }
+      // HEVC UHQ Tune only applies to hevc_nvenc (h264/av1 don't honor it,
+      // QSV/CPU don't support NVENC tunes). Hide otherwise.
+      if (fieldKey === 'hevc_uhq_tune') {
+        var hwVal = configData['gpu'] ? configData['gpu']['hw_decoding'] : '';
+        var codecVal = configData['gpu'] ? configData['gpu']['target_codec'] : '';
+        if (codecVal !== 'hevc' || hwVal !== 'cuda') row.style.display = 'none';
+      }
+      // SSD temp-pool fields: runtime mount availability + user toggle.
+      //   - If API hasn't reported tmp_dir_available=true → hide ALL
+      //     temp-pool fields (compose didn't wire a /tmp-transcode mount,
+      //     nothing useful to configure).
+      //   - If toggle is off → hide path, pool limit, and SSD retry cap; keep toggle
+      //     visible so the user can flip it on.
+      if (fieldKey === 'tmp_dir_enabled' || fieldKey === 'tmp_dir_path' || fieldKey === 'tmp_max_kb' || fieldKey === 'ssd_retry_timeout') {
+        var tmpAvail = lastStatus && lastStatus.tmp_dir_available === true;
+        var tmpEnabled = configData['space'] && configData['space']['tmp_dir_enabled'] === true;
+        if (!tmpAvail) {
+          row.style.display = 'none';
+        } else if (fieldKey !== 'tmp_dir_enabled' && !tmpEnabled) {
+          row.style.display = 'none';
+        }
+      }
+      // HDR Handling: h264 can't carry BT.2020/PQ, so the tonemap
+      // invariant is enforced by reconcileDerivedInvariants() at
+      // mutation time. Here we only render the greyed-out lock UI
+      // — no configData mutation, no saveConfig (would race with
+      // the handler's single pre-save-phase write).
+      if (fieldKey === 'hdr_handling') {
+        var codecVal = configData['gpu'] ? configData['gpu']['target_codec'] : 'h264';
+        if (codecVal === 'h264') {
+          row.style.opacity = '0.55';
+          row.style.pointerEvents = 'none';
+          var lockEl = document.createElement('span');
+          lockEl.style.cssText = 'color:#888;font-size:0.8em;margin-left:8px;';
+          lockEl.textContent = '(h264 can\'t preserve HDR — always tonemapped)';
+          row.appendChild(lockEl);
+        }
+      }
+      // AV1 hardware requirement warning
+      if (srcField === 'target_codec') {
+        var codecVal = configData['gpu'] ? configData['gpu']['target_codec'] : 'h264';
+        var hwVal = configData['gpu'] ? configData['gpu']['hw_decoding'] : 'cuda';
+        var warn = '';
+        if (codecVal === 'av1' && hwVal === 'cuda') warn = 'Requires RTX 4000+ series';
+        if (codecVal === 'av1' && hwVal === 'qsv') warn = 'Requires Intel Arc GPU';
+        if (warn) {
+          var warnEl = document.createElement('span');
+          warnEl.style.cssText = 'color:#e8a838;font-size:0.8em;margin-left:8px;';
+          warnEl.textContent = warn;
+          row.appendChild(warnEl);
+        }
+      }
+      section.appendChild(row);
+    }
+    el.appendChild(section);
+  }
+}
+
+function canonicalConfigValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalConfigValue);
+  }
+  if (value && typeof value === 'object') {
+    var out = {};
+    var keys = Object.keys(value).sort();
+    for (var i = 0; i < keys.length; i++) {
+      out[keys[i]] = canonicalConfigValue(value[keys[i]]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function stableConfigString(value) {
+  return JSON.stringify(canonicalConfigValue(value));
+}
+
+function restartComparableConfig(cfg) {
+  if (!cfg) return cfg;
+  var copy = JSON.parse(JSON.stringify(cfg));
+  if (copy.disks) copy.disks.ignored = '';
+  delete copy.failure_policy;
+  return copy;
+}
+
+function checkConfigChanged() {
+  var changed = configBoot ?
+    stableConfigString(restartComparableConfig(configData)) !== stableConfigString(restartComparableConfig(configBoot)) :
+    false;
+  document.getElementById('restartBanner').className = changed ? 'restart-banner show' : 'restart-banner';
+  document.getElementById('restartBtn').className = changed ? 'btn-restart show' : 'btn-restart';
+}
+
+function saveConfig(options) {
+  var body = JSON.stringify(configData);
+
+  checkConfigChanged();
+  return fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body
+  }).then(function(r) {
+    if (!r.ok) throw new Error('config save failed');
+  }).catch(function(err) {
+    alert('Settings save failed. Please retry before assuming this change is active.');
+    throw err;
+  });
+}
+
+function syncSettingsTextInputs() {
+  var inputs = document.querySelectorAll('#settingsContent .setting-input[data-path]');
+  for (var i = 0; i < inputs.length; i++) {
+    setConfigPath(inputs[i].getAttribute('data-path'), inputs[i].value);
+  }
+}
+
+function readIntegrationFormValues() {
+  var integrations = {};
+  if (configData && configData.integrations) {
+    var keys = Object.keys(configData.integrations);
+    for (var i = 0; i < keys.length; i++) {
+      integrations[keys[i]] = configData.integrations[keys[i]];
+    }
+  }
+
+  var pathInputs = document.querySelectorAll('#settingsContent .setting-input[data-path^="integrations."]');
+  for (var p = 0; p < pathInputs.length; p++) {
+    var path = pathInputs[p].getAttribute('data-path');
+    var key = path.split('.')[1];
+    if (key) integrations[key] = pathInputs[p].value;
+  }
+
+  var groupInputs = document.querySelectorAll('#settingsContent .setting-input[data-group="integrations"][data-field]');
+  for (var g = 0; g < groupInputs.length; g++) {
+    var field = groupInputs[g].getAttribute('data-field');
+    var scale = parseInt(groupInputs[g].getAttribute('data-scale')) || 1;
+    if (field) integrations[field] = (parseInt(groupInputs[g].value) || 0) * scale;
+  }
+
+  return integrations;
+}
+
+function setIntegrationTestButtonState(btn, state) {
+  btn.classList.remove('testing');
+  btn.classList.remove('passed');
+  btn.classList.remove('failed');
+  btn.classList.add(state);
+}
+
+function applyDetectedPlexSettings(detected) {
+  if (!detected || !configData) return false;
+  configData.integrations = configData.integrations || {};
+  var keys = [
+    'plex_movie_section_id',
+    'plex_tv_section_id',
+    'plex_movie_path_root',
+    'plex_tv_path_root'
+  ];
+  var changed = false;
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+    if (detected[key] === undefined || detected[key] === null || detected[key] === '') continue;
+    var value = detected[key];
+    if (key.indexOf('_section_id') !== -1) {
+      value = parseInt(value, 10) || value;
+    }
+    if (configData.integrations[key] !== value) {
+      configData.integrations[key] = value;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function testIntegration(app, btn) {
+  if (!configData || !btn) return;
+  syncSettingsTextInputs();
+  configData.integrations = readIntegrationFormValues();
+  var originalText = btn.getAttribute('data-label') || btn.textContent;
+  btn.setAttribute('data-label', originalText);
+  btn.disabled = true;
+  btn.textContent = 'Testing';
+  setIntegrationTestButtonState(btn, 'testing');
+
+  fetch('/api/integrations/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ app: app, integrations: readIntegrationFormValues() })
+  })
+    .then(function(r) { return r.ok ? r.json() : { ok: 0 }; })
+    .then(function(data) {
+      if (data && data.ok) {
+        if (app === 'plex' && applyDetectedPlexSettings(data.detected)) {
+          saveConfig({ detectedPlex: true });
+        }
+        btn.textContent = originalText;
+        btn.classList.add('passed');
+      } else {
+        btn.textContent = originalText;
+        btn.classList.add('failed');
+      }
+    })
+    .catch(function() {
+      btn.textContent = originalText;
+      btn.classList.add('failed');
+    })
+    .then(function() {
+      btn.classList.remove('testing');
+      btn.disabled = false;
+    });
+}
+
+function updateDiskCounts(d) {
+  diskCounts = d;
+  var total = 0;
+  var keys = Object.keys(d);
+  // Reset all buttons first
+  var allBtns = document.querySelectorAll('.filter-btn[data-disk]');
+  for (var b = 0; b < allBtns.length; b++) {
+    allBtns[b].innerHTML = esc(allBtns[b].getAttribute('data-disk')) + ' <span class="count">0</span>';
+  }
+  for (var i = 0; i < keys.length; i++) {
+    total += d[keys[i]];
+    var btn = document.getElementById('filter-' + keys[i]);
+    if (btn) btn.innerHTML = esc(keys[i]) + ' <span class="count">' + num(d[keys[i]]) + '</span>';
+  }
+  var allBtn = document.getElementById('filter-all');
+  if (allBtn) allBtn.innerHTML = 'All <span class="count">' + num(total) + '</span>';
+}
+
+function setDiskFilter(disk) {
+  diskFilter = disk;
+  // Scope to #diskFilters so we don't clobber flag-filter button state.
+  var btns = document.querySelectorAll('#diskFilters .filter-btn');
+  for (var i = 0; i < btns.length; i++) {
+    var d = btns[i].getAttribute('data-disk') || 'all';
+    btns[i].className = d === disk || (!btns[i].getAttribute('data-disk') && disk === 'all') ? 'filter-btn active' : 'filter-btn';
+  }
+  // Reload active list with server-side filter (skip settings)
+  if (currentTab !== 'settings') {
+    loadList(currentTab, false);
+  }
+}
+
+function humanizeReason(r) {
+  var labels = {
+    short_radarr_runtime: 'Short Radarr Runtime'
+  };
+  if (labels[r]) return labels[r];
+  return (r || '').replace(/_/g, ' ');
+}
+
+function updateFlagCounts(d) {
+  flagCounts = d || {};
+  var ff = document.getElementById('flagFilters');
+  if (!ff) return;
+
+  // Create All button if missing
+  if (!document.getElementById('flag-filter-all')) {
+    var allBtn = document.createElement('button');
+    allBtn.className = 'filter-btn' + (flagFilter === 'all' ? ' active' : '');
+    allBtn.id = 'flag-filter-all';
+    allBtn.onclick = function() { setFlagFilter('all'); };
+    ff.appendChild(allBtn);
+  }
+
+  // Create per-reason buttons if missing (handles flags that appear later)
+  var keys = Object.keys(d).sort();
+  for (var i = 0; i < keys.length; i++) {
+    (function(k) {
+      if (!document.getElementById('flag-filter-' + k)) {
+        var btn = document.createElement('button');
+        btn.className = 'filter-btn' + (flagFilter === k ? ' active' : '');
+        btn.id = 'flag-filter-' + k;
+        btn.setAttribute('data-flag', k);
+        btn.onclick = function() { setFlagFilter(k); };
+        ff.appendChild(btn);
+      }
+    })(keys[i]);
+  }
+
+  // Refresh counts on every button (existing reasons that hit zero get a 0)
+  var total = 0;
+  for (var j = 0; j < keys.length; j++) total += d[keys[j]];
+  var btns = ff.querySelectorAll('.filter-btn[data-flag]');
+  for (var b = 0; b < btns.length; b++) {
+    var bk = btns[b].getAttribute('data-flag');
+    var c = d[bk] || 0;
+    btns[b].innerHTML = esc(humanizeReason(bk)) + ' <span class="count">' + num(c) + '</span>';
+  }
+  var allEl = document.getElementById('flag-filter-all');
+  if (allEl) allEl.innerHTML = 'All <span class="count">' + num(total) + '</span>';
+}
+
+function setFlagFilter(reason) {
+  flagFilter = reason;
+  var ff = document.getElementById('flagFilters');
+  if (ff) {
+    var btns = ff.querySelectorAll('.filter-btn');
+    for (var i = 0; i < btns.length; i++) {
+      var k = btns[i].getAttribute('data-flag') || 'all';
+      btns[i].className = (k === reason || (!btns[i].getAttribute('data-flag') && reason === 'all'))
+        ? 'filter-btn active' : 'filter-btn';
+    }
+  }
+  updateClearFlaggedBtnVisibility();
+  if (currentTab === 'flagged') {
+    loadList('flagged', false);
+  }
+}
+
+// Clear Flagged button is only meaningful when "All" is selected — a
+// per-tag clear would imply line-by-line removal we deliberately don't
+// support.
+function updateClearFlaggedBtnVisibility() {
+  var btn = document.getElementById('clearFlaggedBtn');
+  if (!btn) return;
+  btn.style.display = (currentTab === 'flagged' && flagFilter === 'all') ? '' : 'none';
+}
+
+function rescanQueue() {
+  if (!confirm('Clear failed, flagged, verified, and fully classified caches, then run a full rescan?\n\n' +
+               'This does not clear Done history or stop active workers.\n' +
+               'Active workers may repopulate cache entries as they finish.\n' +
+               'Large libraries may take several minutes to scan.')) return;
+  var btn = document.getElementById('rescanBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '\u21bb Resetting...';
+  }
+  fetch('/api/rescan', { method: 'POST' })
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .catch(function() { /* transient */ })
+    .then(function() {
+      // Give the scanner a few seconds to repopulate before refreshing
+      // any visible list. Status polling will reflect the new counts.
+      setTimeout(function() {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '\u21bb Clear Cache & Rescan';
+        }
+        if (typeof loadList === 'function' && currentTab !== 'settings') {
+          loadList(currentTab, false);
+        }
+        if (typeof fetchStatus === 'function') fetchStatus();
+      }, 3000);
+    });
+}
+
+function runFailurePoliciesNow() {
+  var btn = document.getElementById('policyRunBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Running...';
+  }
+  fetch('/api/failure-policy/run', { method: 'POST' })
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function() { return fetchFailurePolicyStatus(); })
+    .then(function() {
+      if (currentTab === 'failed') loadList('failed', false);
+    })
+    .catch(function() {
+      alert('Failure policies could not be run.');
+    })
+    .then(function() {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Run Failure Policies Now';
+      }
+    });
+}
+
+function langRescan() {
+  if (!confirm('Re-scan all failed no-eng-audio files through language detection?\n\n' +
+               'Only takes effect if Language Detection is enabled AND the container\n' +
+               'has been restarted (the detection pool must be running). MKV files\n' +
+               'are released back into the queue; their failed cards stay until\n' +
+               'detection resolves them.')) return;
+  var btn = document.getElementById('langRescanBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Re-scanning...'; }
+  fetch('/api/lang/rescan', { method: 'POST' })
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .catch(function() { /* transient */ })
+    .then(function(d) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Re-scan no-eng-audio'; }
+      if (d && d.released !== undefined) {
+        alert('Released ' + d.released + ' MKV no-eng-audio file(s) for detection.');
+      }
+      if (typeof fetchStatus === 'function') fetchStatus();
+    });
+}
+
+function clearFlaggedList() {
+  if (flaggedClearInFlight) return;
+  var btn = document.getElementById('clearFlaggedBtn');
+  flaggedClearInFlight = true;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Clearing...';
+  }
+
+  fetch('/api/tsv/flagged/clear', { method: 'POST' })
+    .then(function(r) {
+      if (!r.ok) throw new Error('clear flagged failed');
+      return r.json();
+    })
+    .then(function() {
+      offsets.flagged = 0;
+      rowEls.flagged = {};
+      loaded.flagged = false;
+      lastFilter.flagged = null;
+      return loadListAsync('flagged');
+    })
+    .then(function() {
+      return fetch('/api/status')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(d) { if (d) handleStatus(d); });
+    })
+    .catch(function() {
+      alert('Flagged list could not be cleared.');
+    })
+    .then(function() {
+      flaggedClearInFlight = false;
+      if (btn) {
+        btn.textContent = 'Clear Flagged';
+        btn.disabled = true;
+      }
+      fetchStatus();
+    });
+}
+
+function clearFailedList() {
+  if (failedClearInFlight) return;
+  var btn = document.getElementById('clearFailedBtn');
+  failedClearInFlight = true;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Clearing...';
+  }
+
+  fetch('/api/tsv/failed/clear', { method: 'POST' })
+    .then(function(r) {
+      if (!r.ok) throw new Error('clear failed');
+      return r.json();
+    })
+    .then(function() {
+      offsets.failed = 0;
+      rowEls.failed = {};
+      loaded.failed = false;
+      lastFilter.failed = null;
+      return loadListAsync('failed');
+    })
+    .then(function() {
+      return fetch('/api/status')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(d) { if (d) handleStatus(d); });
+    })
+    .catch(function() {
+      alert('Failed list could not be cleared.');
+    })
+    .then(function() {
+      failedClearInFlight = false;
+      if (btn) {
+        btn.textContent = 'Clear Failed';
+        btn.disabled = true;
+      }
+      fetchStatus();
+    });
+}
+
+function restartContainer() {
+  if (!confirm('Restart Transcodarr to apply settings?')) return;
+  fetch('/api/restart', { method: 'POST' }).catch(function() {});
+  // Replace page with restart screen
+  document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0f0f0f;color:#e0e0e0;font-family:-apple-system,system-ui,sans-serif">' +
+    '<img src="https://github.com/jb14813/Transcodarr/raw/main/icon.png" alt="" style="width:64px;height:64px;margin-bottom:16px;border-radius:8px;opacity:0.7">' +
+    '<div style="font-size:20px;font-weight:600;margin-bottom:8px">Restarting Transcodarr</div>' +
+    '<div style="font-size:13px;color:#888" id="restartStatus">Waiting for container...</div></div>';
+  var dots = 0;
+  var dotInterval = setInterval(function() {
+    dots = (dots + 1) % 4;
+    var el = document.getElementById('restartStatus');
+    if (el) el.textContent = 'Waiting for container' + '...'.substring(0, dots);
+  }, 500);
+  setTimeout(function checkAlive() {
+    fetch('/api/status')
+      .then(function(r) {
+        if (!r.ok) throw new Error('not ready');
+        return r.json();
+      })
+      .then(function(d) {
+        if (d && d.paused !== undefined) { clearInterval(dotInterval); location.reload(); }
+        else { setTimeout(checkAlive, 3000); }
+      })
+      .catch(function() { setTimeout(checkAlive, 3000); });
+  }, 5000);
+}
+
+// Sequential loader — stagger initial requests
+var initQueue = [
+  function() { return fetch('/api/status').then(function(r) { return r.json(); }).then(handleStatus); },
+  function() { return fetchFailurePolicyStatus(); },
+  // Capabilities fetched BEFORE /api/config so renderSettings (triggered
+  // by the last init entry) can filter target_codec options. Swallow
+  // fetch errors — if the probe is still running at first load, the
+  // hash will be empty and renderSettings falls back to showing all
+  // options (permissive default, worker still catches at encode time).
+  function() { return fetchCapabilities(); },
+  function() { return loadListAsync('gpu'); },
+  function() { return loadListAsync('cpu'); },
+  function() { return loadListAsync('processed'); },
+  function() { return loadListAsync('flagged'); },
+  function() { return loadListAsync('failed'); },
+  function() { return fetch('/api/config/boot').then(function(r) { return r.json(); }).then(function(d) { configBoot = normalizeConfig(d); }); },
+  function() { return fetch('/api/config').then(function(r) { return r.json(); }).then(function(d) {
+    configData = normalizeConfig(d);
+    // One-time silent cleanup of stale preset remnants from older
+    // installs. When preset != custom, the worker always re-applies
+    // preset values at runtime, so stored individual keys that don't
+    // match the preset are purely cosmetic drift. Rewrite them to
+    // match AND update configBoot in-place so the restart banner
+    // doesn't erroneously fire — the runtime behavior doesn't change,
+    // only config.json cleanliness does.
+    var presetChanged = applyPresetToConfig();
+    var invariantChanged = reconcileDerivedInvariants();
+    if (presetChanged || invariantChanged) {
+      saveConfig();
+      configBoot = JSON.parse(JSON.stringify(configData));
+    }
+    renderSettings();
+    checkConfigChanged();
+  }); }
+];
+
+function runInitQueue(i) {
+  if (i >= initQueue.length) {
+    // All loaded — start polling. The poller refreshes the visible tab
+    // in place via pollListDelta() instead of wiping-and-rerendering, so any
+    // "Load more" expansion the user has clicked stays visible across refreshes.
+    setInterval(function() {
+      fetchStatus();
+      if (currentTab === 'settings') fetchFailurePolicyStatus();
+      if (currentTab !== 'settings') {
+        pollListDelta(currentTab);
+      }
+    }, 10000);
+    return;
+  }
+  initQueue[i]()
+    .then(function() { runInitQueue(i + 1); })
+    .catch(function() { runInitQueue(i + 1); });
+}
+
+// In-place refresh of the active list. Two strategies:
+//
+//   • queue tabs (gpu/cpu) — items enter and leave the queue, and order
+//     can change (priority items can jump ahead of bulk). Reconcile against
+//     the API response: walk it in order, appendChild each existing element
+//     (which moves it to the new position) or render+append for new keys,
+//     then drop any rowEls entries the response didn't mention.
+//
+//   • processed/flagged TSV tabs — append-only, newest-first. Existing
+//     rows never move or disappear. Detect new keys at the top of the
+//     response and prepend them; leave everything below alone. The user's
+//     expansion (offsets[tab]) is preserved exactly.
+//
+//   • failed TSV tab — mutable. A later successful reprocess removes rows
+//     from failed-files.tsv, so reconcile the loaded window and drop stale
+//     DOM cards.
+//
+// Both paths preserve click-to-expand state on individual rows because
+// existing DOM elements are reused, not destroyed.
+function pollListDelta(tab) {
+  if (!tab || tab === 'settings') return;
+  if (!loaded[tab]) return;
+  var list = document.getElementById('list-' + tab);
+  if (!list) return;
+
+  var url, limit;
+  if (tab === 'gpu' || tab === 'cpu') {
+    // Reconcile up to whatever the user has expanded to. Falls back to PAGE
+    // if they haven't expanded past the initial load.
+    limit = Math.max(offsets[tab] || 0, PAGE);
+    url = '/api/queue/' + tab + '?offset=0&limit=' + limit;
+  } else if (tab === 'failed' || tab === 'flagged') {
+    // These TSVs shrink after successful reprocess/language cleanup. Refetch the
+    // currently loaded window so stale cards can be removed without losing a
+    // "Load more" expansion.
+    limit = Math.max(offsets[tab] || 0, PAGE);
+    url = '/api/tsv/' + tab + '?offset=0&limit=' + limit;
+  } else {
+    // Top PAGE is always enough to catch newly-appended TSV rows between
+    // polls — we don't need to refetch the user's full expansion window
+    // because the existing rows below the top PAGE never change.
+    limit = PAGE;
+    url = '/api/tsv/' + tab + '?offset=0&limit=' + limit;
+  }
+  if (diskFilter !== 'all') url += '&disk=' + encodeURIComponent(diskFilter);
+  if (searchTerm) url += '&q=' + encodeURIComponent(searchTerm);
+  if (tab === 'flagged' && flagFilter !== 'all') url += '&reason=' + encodeURIComponent(flagFilter);
+
+  fetch(url)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      // TSV disk_counts refresh
+      if ((tab === 'processed' || tab === 'failed') && tab === currentTab && data.disk_counts && disksLoaded) {
+        updateDiskCounts(data.disk_counts);
+      }
+      if (tab === 'flagged' && tab === currentTab && data.reason_counts) {
+        updateFlagCounts(data.reason_counts);
+      }
+      if (tab === 'gpu' || tab === 'cpu') {
+        reconcileQueueList(tab, list, data);
+      } else if (tab === 'failed' || tab === 'flagged') {
+        reconcileMutableTsvList(tab, list, data);
+      } else {
+        prependNewTsvRows(tab, list, data);
+      }
+    })
+    .catch(function() {});
+}
+
+function reconcileQueueList(tab, list, data) {
+  var footer = document.getElementById('footer-' + tab);
+  // Footer owns load-more / empty; clear it during reconcile and
+  // re-render at the end based on fresh offsets.
+  footer.innerHTML = '';
+
+  if (!data.items || !data.items.length) {
+    // Queue went empty — drop all rows, show empty state in footer.
+    list.innerHTML = '';
+    footer.innerHTML = '<div class="empty">Queue empty</div>';
+    rowEls[tab] = {};
+    offsets[tab] = 0;
+    return;
+  }
+
+  // Walk the response in order. appendChild() moves an existing element to
+  // the end of its parent (so iterating in target order naturally
+  // reorders the DOM to match), or attaches a freshly-rendered element for
+  // newly-arrived items.
+  var newRowEls = {};
+  var seenKeys = {};
+  for (var i = 0; i < data.items.length; i++) {
+    var item = data.items[i];
+    var key = itemKey(tab, item);
+    seenKeys[key] = 1;
+    var el = rowEls[tab][key];
+    if (!el) {
+      el = renderItem(tab, item);
+    }
+    list.appendChild(el);
+    newRowEls[key] = el;
+  }
+
+  // Drop elements for rows that have left the queue.
+  for (var oldKey in rowEls[tab]) {
+    if (!seenKeys[oldKey]) {
+      var oldEl = rowEls[tab][oldKey];
+      if (oldEl && oldEl.parentNode) oldEl.parentNode.removeChild(oldEl);
+    }
+  }
+  rowEls[tab] = newRowEls;
+  offsets[tab] = data.items.length;
+
+  if (offsets[tab] < data.total) {
+    var btn = document.createElement('button');
+    btn.className = 'load-more';
+    btn.textContent = 'Load more (' + num(data.total - offsets[tab]) + ' remaining)';
+    btn.onclick = (function(t) { return function() { loadList(t, true); }; })(tab);
+    footer.appendChild(btn);
+  }
+}
+
+function reconcileMutableTsvList(tab, list, data) {
+  var footer = document.getElementById('footer-' + tab);
+  if (footer) footer.innerHTML = '';
+
+  if (!data.items || !data.items.length) {
+    list.innerHTML = '';
+    if (footer) footer.innerHTML = '<div class="empty">No entries</div>';
+    rowEls[tab] = {};
+    offsets[tab] = 0;
+    return;
+  }
+
+  var newRowEls = {};
+  var seenKeys = {};
+  for (var i = 0; i < data.items.length; i++) {
+    var item = data.items[i];
+    var key = itemKey(tab, item);
+    seenKeys[key] = 1;
+    var el = rowEls[tab][key];
+    if (!el) {
+      el = renderItem(tab, item);
+    }
+    list.appendChild(el);
+    newRowEls[key] = el;
+  }
+
+  for (var oldKey in rowEls[tab]) {
+    if (!seenKeys[oldKey]) {
+      var oldEl = rowEls[tab][oldKey];
+      if (oldEl && oldEl.parentNode) oldEl.parentNode.removeChild(oldEl);
+    }
+  }
+  rowEls[tab] = newRowEls;
+  offsets[tab] = data.items.length;
+
+  if (footer && data.total !== undefined && offsets[tab] < data.total) {
+    var btn = document.createElement('button');
+    btn.className = 'load-more';
+    btn.textContent = 'Load more (' + num(data.total - offsets[tab]) + ' remaining)';
+    btn.onclick = (function(t) { return function() { loadList(t, true); }; })(tab);
+    footer.appendChild(btn);
+  }
+}
+
+function prependNewTsvRows(tab, list, data) {
+  if (!data.items || !data.items.length) return;
+  var footer = document.getElementById('footer-' + tab);
+
+  // Drop any "no entries" placeholder from a cold tab (lives in footer).
+  if (footer) {
+    var emptyEl = footer.querySelector('.empty');
+    if (emptyEl) emptyEl.parentNode.removeChild(emptyEl);
+  }
+
+  // Find the rows in the top-N response that aren't already in the DOM.
+  var newRows = [];
+  for (var i = 0; i < data.items.length; i++) {
+    var item = data.items[i];
+    var key = itemKey(tab, item);
+    if (!rowEls[tab][key]) {
+      newRows.push({ item: item, key: key });
+    }
+  }
+  if (!newRows.length) {
+    // Nothing new — but the load-more remaining count may have shifted if
+    // total grew (a row was added below our window). Refresh its label.
+    if (data.total !== undefined && offsets[tab] < data.total && footer) {
+      var btn0 = footer.querySelector('.load-more');
+      if (btn0) btn0.textContent = 'Load more (' + num(data.total - offsets[tab]) + ' remaining)';
+    }
+    return;
+  }
+
+  // Prepend in reverse iteration order so the oldest of the new rows ends
+  // up just above the previously-top row, and the newest of the new rows
+  // ends up at the very top — matching the response's newest-first order.
+  for (var j = newRows.length - 1; j >= 0; j--) {
+    var el = renderItem(tab, newRows[j].item);
+    list.insertBefore(el, list.firstChild);
+    rowEls[tab][newRows[j].key] = el;
+  }
+  offsets[tab] += newRows.length;
+
+  // Update the load-more button's remaining count or remove it if we've
+  // now caught up.
+  if (footer) {
+    var btn = footer.querySelector('.load-more');
+    if (btn) {
+      if (data.total !== undefined && offsets[tab] >= data.total) {
+        btn.parentNode.removeChild(btn);
+      } else if (data.total !== undefined) {
+        btn.textContent = 'Load more (' + num(data.total - offsets[tab]) + ' remaining)';
+      }
+    }
+  }
+}
+
+function handleStatus(d) {
+  // Remember runtime-detected fields for the settings renderer. If the
+  // settings tab is already open, force a re-render so that flips in
+  // tmp_dir_available or the runtime disk list surface in the GUI without
+  // requiring a page reload.
+  var prevTmpAvail = lastStatus ? lastStatus.tmp_dir_available : undefined;
+  var prevDiskSig = statusDiskSignature(lastStatus);
+  var nextDiskSig = statusDiskSignature(d);
+  lastStatus = d;
+  if (currentTab === 'settings' && configData &&
+      (prevTmpAvail !== d.tmp_dir_available || prevDiskSig !== nextDiskSig)) {
+    renderSettingsIfIdle();
+  }
+  paused = d.paused;
+  document.getElementById('gpuWorkers').textContent = num(d.gpu_workers);
+  document.getElementById('cpuWorkers').textContent = num(d.cpu_workers);
+  document.getElementById('processed').textContent = num(d.processed);
+  document.getElementById('failed').textContent = num(d.failed);
+
+  // Scan Activity — backend exposes `scan` sub-object. Two cache rows:
+  // Verified cache (union of narrow Phase 1 + broad Phase 3 rails,
+  // unique-paths deduped) and Failed cache (negative gate). The
+  // separate narrow/broad row counts that earlier revisions exposed
+  // are deliberately not surfaced to the GUI — fragmented metrics
+  // were confusing without a corresponding domain-meaningful split.
+  // probe_workers / disk_workers remain in the top-level JSON for any
+  // external tooling but the GUI doesn't surface them as tiles.
+  var scan = d.scan;
+  if (scan) {
+    document.getElementById('scanPhase').textContent          = scan.phase || '—';
+    document.getElementById('scanStatus').textContent         = scan.status || '—';
+    document.getElementById('scanPending').textContent        = num(scan.pending);
+    document.getElementById('scanVerifiedUnique').textContent = num(scan.verified_unique_count);
+    document.getElementById('scanFailedHash').textContent     = num(scan.failed_hash_count);
+    document.getElementById('scanPct').textContent            = (scan.progress_pct != null) ? scan.progress_pct : '—';
+
+    // When scan is idle, hide the scan-only rows (Activity, Pending,
+    // progress bar, progress %) — they're frozen at Idle/0/100% until
+    // next restart and just clutter the panel. Keep the cache rows
+    // visible since they continue to update as workers complete files.
+    var idle = (scan.phase === 'Idle');
+    ['scanActivityRow', 'scanPendingRow', 'scanBar', 'scanPctRow'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = idle ? 'none' : '';
+    });
+    var bar  = document.getElementById('scanBar');
+    var fill = document.getElementById('scanFill');
+    if (scan.indeterminate) {
+      bar.classList.add('indeterminate');
+      // fill width is overridden by the indeterminate stripe rule, but
+      // keep a value here so a CSS reset wouldn't reveal a 0-width bar.
+      fill.style.width = '100%';
+    } else {
+      bar.classList.remove('indeterminate');
+      var pct = Math.max(0, Math.min(100, scan.progress_pct || 0));
+      fill.style.width = pct + '%';
+    }
+  }
+  document.getElementById('gpuBadge').textContent = num(d.gpu_queue);
+  document.getElementById('cpuBadge').textContent = num(d.cpu_queue);
+  document.getElementById('procBadge').textContent = num(d.processed);
+  document.getElementById('flagBadge').textContent = num(d.flagged);
+  document.getElementById('failBadge').textContent = num(d.failed);
+
+  var clearFailedBtn = document.getElementById('clearFailedBtn');
+  if (clearFailedBtn && !failedClearInFlight) {
+    clearFailedBtn.disabled = !(d.failed > 0);
+  }
+  var clearFlaggedBtn = document.getElementById('clearFlaggedBtn');
+  if (clearFlaggedBtn && !flaggedClearInFlight) {
+    clearFlaggedBtn.disabled = !(d.flagged > 0);
+  }
+
+  // Build disk filter buttons once
+  if (!disksLoaded && d.disks && d.disks.length) {
+    disksLoaded = true;
+    var df = document.getElementById('diskFilters');
+    df.innerHTML = '';
+    var allBtn = document.createElement('button');
+    allBtn.className = 'filter-btn active';
+    allBtn.id = 'filter-all';
+    allBtn.innerHTML = 'All';
+    allBtn.onclick = function() { setDiskFilter('all'); };
+    df.appendChild(allBtn);
+    d.disks.sort(function(a, b) {
+      var na = parseInt(a.replace(/\D/g, '')) || 0;
+      var nb = parseInt(b.replace(/\D/g, '')) || 0;
+      return na - nb;
+    });
+    for (var i = 0; i < d.disks.length; i++) {
+      var btn = document.createElement('button');
+      btn.className = 'filter-btn';
+      btn.id = 'filter-' + d.disks[i];
+      btn.setAttribute('data-disk', d.disks[i]);
+      btn.innerHTML = esc(d.disks[i]);
+      btn.onclick = function() { setDiskFilter(this.getAttribute('data-disk')); };
+      df.appendChild(btn);
+    }
+  }
+  // Update disk counts from status — only when a queue tab is active;
+  // TSV tabs own their counts via loadList()
+  if (d.disk_counts && disksLoaded && (currentTab === 'gpu' || currentTab === 'cpu')) {
+    updateDiskCounts(d.disk_counts);
+  }
+  var dot = document.getElementById('statusDot');
+  var label = document.getElementById('statusLabel');
+  var btn = document.getElementById('toggleBtn');
+  if (d.paused) {
+    dot.className = 'status-dot paused';
+    label.textContent = 'Paused';
+    btn.textContent = 'Resume';
+    btn.className = 'btn card-action btn-play';
+  } else {
+    dot.className = 'status-dot running';
+    label.textContent = 'Running';
+    btn.textContent = 'Pause';
+    btn.className = 'btn card-action btn-pause';
+  }
+  var aj = document.getElementById('activeJobs');
+  var jobs = d.active || [];
+  if (!jobs.length) {
+    aj.innerHTML = '<div class="active-none">No active jobs</div>';
+  } else {
+    aj.innerHTML = '';
+    for (var i = 0; i < jobs.length; i++) {
+      var j = jobs[i];
+      var el = document.createElement('div');
+      el.className = 'item active-' + (j.type || 'gpu');
+      var phase = (j.phase || 'queued').charAt(0).toUpperCase() + (j.phase || 'queued').slice(1);
+      // Same arr-origin badge as the queue rows — only renders when this
+      // item came in via a .job file (route=import). Bulk/direct items
+      // don't get a badge; the existing meta line still shows service.
+      var importBadge = '';
+      if (j.route === 'import' && j.service) {
+        var svcName = j.service.charAt(0).toUpperCase() + j.service.slice(1);
+        importBadge = '<span class="row-import-badge ' + esc(j.service) + '">' + esc(svcName) + '</span>';
+      }
+      el.innerHTML = '<div class="file">' + importBadge + esc(j.file) + '</div>' +
+        '<div class="meta">' + esc(j.type).toUpperCase() + ' &middot; ' + esc(phase) + ' &middot; ' + esc(j.service) + ' &middot; ' + esc(j.disk) + '</div>';
+      aj.appendChild(el);
+    }
+  }
+
+  // ── Direct Queue: staged count + Start/Stop button state ──────────
+  // Counts come from the extended /api/status (gpu_direct_queue +
+  // cpu_direct_queue fields added in Phase 3). The pending-disabled
+  // flag is owned by the tag/untag/start/stop click handlers — we only
+  // flip enabled when no mutation is in flight.
+  var emptyEl    = document.getElementById('direct-empty');
+  var listEl     = document.getElementById('direct-list');
+  var actionBtn  = document.getElementById('direct-action-btn');
+  var stagedTotal = (d.gpu_direct_queue || 0) + (d.cpu_direct_queue || 0);
+  // Mirror the Active Workers empty-state pattern: show "N staged" text
+  // when the list is empty, swap to the populated list when not.
+  if (emptyEl) {
+    emptyEl.textContent = stagedTotal + ' staged';
+    emptyEl.style.display = stagedTotal === 0 ? '' : 'none';
+  }
+  if (listEl) {
+    listEl.style.display = stagedTotal === 0 ? 'none' : '';
+  }
+  if (actionBtn) {
+    if (d.direct_active === 1) {
+      actionBtn.textContent = 'Stop';
+      actionBtn.classList.add('running');
+      if (!actionBtn.dataset.pendingDisabled) actionBtn.disabled = false;
+    } else {
+      actionBtn.textContent = 'Start';
+      actionBtn.classList.remove('running');
+      if (!actionBtn.dataset.pendingDisabled) {
+        actionBtn.disabled = (stagedTotal === 0);
+      }
+    }
+  }
+  // Fire a targeted /api/direct refetch whenever the staged total
+  // changes — cheaper than polling on every status tick, and keeps the
+  // list visually in-sync with tag/untag events from other clients.
+  if (stagedTotal !== (window.__lastDirectCount == null ? -1 : window.__lastDirectCount)) {
+    window.__lastDirectCount = stagedTotal;
+    fetchDirectList();
+  }
+}
+
+// Promise-based loadList for sequential init
+function loadListAsync(tab) {
+  var url;
+  if (tab === 'gpu' || tab === 'cpu') {
+    url = '/api/queue/' + tab + '?offset=0&limit=' + PAGE;
+    if (diskFilter !== 'all') url += '&disk=' + diskFilter;
+    if (searchTerm) url += '&q=' + encodeURIComponent(searchTerm);
+  } else {
+    url = '/api/tsv/' + tab + '?offset=0&limit=' + PAGE;
+    if (diskFilter !== 'all') url += '&disk=' + diskFilter;
+    if (searchTerm) url += '&q=' + encodeURIComponent(searchTerm);
+    if (tab === 'flagged' && flagFilter !== 'all') url += '&reason=' + encodeURIComponent(flagFilter);
+  }
+  return fetch(url)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var list = document.getElementById('list-' + tab);
+      var footer = document.getElementById('footer-' + tab);
+      list.innerHTML = '';
+      footer.innerHTML = '';
+      rowEls[tab] = {};
+      lastFilter[tab] = currentFilterKey();
+      loaded[tab] = true;
+      if (tab === 'flagged' && data.reason_counts) {
+        updateFlagCounts(data.reason_counts);
+      }
+      if (!data.items.length) {
+        footer.innerHTML = '<div class="empty">' + (tab === 'gpu' || tab === 'cpu' ? 'Queue empty' : 'No entries') + '</div>';
+        return;
+      }
+      for (var i = 0; i < data.items.length; i++) {
+        var item = data.items[i];
+        var key = itemKey(tab, item);
+        var el = renderItem(tab, item);
+        list.appendChild(el);
+        rowEls[tab][key] = el;
+      }
+      offsets[tab] = data.items.length;
+      if (offsets[tab] < data.total) {
+        var btn = document.createElement('button');
+        btn.className = 'load-more';
+        btn.textContent = 'Load more (' + num(data.total - offsets[tab]) + ' remaining)';
+        btn.onclick = (function(t) { return function() { loadList(t, true); }; })(tab);
+        footer.appendChild(btn);
+      }
+    });
+}
+
+// ── Search input wiring ─────────────────────────────────────────────
+// Debounced server-side search. Each keystroke schedules a 250ms timer;
+// the actual reload only fires once the user pauses typing. Keeps the
+// 12k+ CPU queue from being LRANGE-scanned on every character.
+(function () {
+  var input = document.getElementById('searchInput');
+  if (!input) return;
+  var timer = null;
+  input.addEventListener('input', function () {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function () {
+      var v = input.value || '';
+      if (v === searchTerm) return;
+      searchTerm = v;
+      // Reset pagination so the user sees the first match, not page N
+      // of the previous filter.
+      offsets[currentTab] = 0;
+      if (currentTab !== 'settings') loadList(currentTab, false);
+    }, 250);
+  });
+})();
+
+// Delay first request — let server finish serving the HTML page
+setTimeout(function() { runInitQueue(0); }, 500);
+</script>
+<div class="footer">
+  <div>Transcodarr <span class="version">v3.2.1</span></div>
+  <div>Created by <a href="https://github.com/jb14813">jb14813</a> | <a href="https://ko-fi.com/H2H41XM0EP">Support on Ko-fi</a></div>
+  <div>GPL-3.0 | Built with <a href="https://ffmpeg.org/legal.html">FFmpeg</a> | <a href="https://valkey.io">Valkey</a></div>
+</div>
+</body>
+</html>

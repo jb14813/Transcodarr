@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Transcodarr</Name>
+  <Repository>transcodarr:latest</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/jb14813/Transcodarr</Support>
+  <Project>https://github.com/jb14813/Transcodarr</Project>
+  <Overview>Automated media transcoding for Sonarr/Radarr libraries. GPU-accelerated H.264 encoding via NVIDIA NVENC with a mobile-friendly web dashboard. Scans your libraries through Sonarr/Radarr APIs, identifies files needing transcoding, and processes them through a 5-stage pipeline with per-disk concurrency control. Starts paused by default — press Resume in the web UI to begin processing.</Overview>
+  <Category>MediaApp:Video Productivity:Tools</Category>
+  <WebUI>http://[IP]:[PORT:7879]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/jb14813/Transcodarr/main/transcodarr.xml</TemplateURL>
+  <Icon>https://github.com/jb14813/Transcodarr/raw/main/icon.png</Icon>
+  <ExtraParams>--runtime=nvidia</ExtraParams>
+  <PostArgs/>
+  <DonateText>Support on Ko-fi</DonateText>
+  <DonateLink>https://ko-fi.com/H2H41XM0EP</DonateLink>
+  <Requires>NVIDIA GPU with NVENC support. NVIDIA Container Toolkit installed. Sonarr and/or Radarr with API access.</Requires>
+  <Config Name="Web UI Port" Target="7879" Default="7879" Mode="tcp" Description="Web dashboard and API port" Type="Port" Display="always" Required="true" Mask="false">7879</Config>
+  <Config Name="Movies" Target="/movies" Default="/mnt/user/Media/Movies" Mode="rw" Description="Path to your movie library" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/Media/Movies</Config>
+  <Config Name="TV Shows" Target="/tv" Default="/mnt/user/Media/TV" Mode="rw" Description="Path to your TV library" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/Media/TV</Config>
+  <Config Name="App Data" Target="/state" Default="/mnt/user/appdata/transcodarr" Mode="rw" Description="Persistent config and state" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/transcodarr</Config>
+  <Config Name="Import Queue" Target="/queue" Default="/mnt/user/appdata/transcodarr/queue" Mode="rw" Description="Arr webhook job queue" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/transcodarr/queue</Config>
+  <Config Name="Scripts" Target="/scripts" Default="" Mode="ro" Description="Path to Transcodarr scripts directory" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="NVIDIA_VISIBLE_DEVICES" Target="NVIDIA_VISIBLE_DEVICES" Default="all" Mode="" Description="GPU devices to expose" Type="Variable" Display="always" Required="true" Mask="false">all</Config>
+  <Config Name="NVIDIA_DRIVER_CAPABILITIES" Target="NVIDIA_DRIVER_CAPABILITIES" Default="all" Mode="" Description="GPU driver capabilities" Type="Variable" Display="always" Required="false" Mask="false">all</Config>
+  <Config Name="Timezone" Target="TZ" Default="America/New_York" Mode="" Description="Container timezone" Type="Variable" Display="always" Required="false" Mask="false">America/New_York</Config>
+  <Config Name="Radarr URL" Target="RADARR_URL" Default="http://radarr:7878" Mode="" Description="Radarr API URL" Type="Variable" Display="always" Required="true" Mask="false">http://radarr:7878</Config>
+  <Config Name="Radarr API Key" Target="RADARR_API_KEY" Default="" Mode="" Description="Radarr API key" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Sonarr URL" Target="SONARR_URL" Default="http://sonarr:8989" Mode="" Description="Sonarr API URL" Type="Variable" Display="always" Required="true" Mask="false">http://sonarr:8989</Config>
+  <Config Name="Sonarr API Key" Target="SONARR_API_KEY" Default="" Mode="" Description="Sonarr API key" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Plex URL" Target="PLEX_URL" Default="" Mode="" Description="Plex server URL for library refresh notifications" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="Plex Token" Target="PLEX_TOKEN" Default="" Mode="" Description="Plex authentication token" Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="Auto Start" Target="TRANSCODARR_AUTO_START" Default="false" Mode="" Description="Start processing immediately on boot (false = start paused)" Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="GPU Workers" Target="TRANSCODARR_GPU_WORKERS" Default="2" Mode="" Description="Number of NVENC GPU encode workers" Type="Variable" Display="advanced" Required="false" Mask="false">2</Config>
+  <Config Name="CPU Workers" Target="TRANSCODARR_CPU_WORKERS" Default="2" Mode="" Description="Number of audio-only CPU remux workers" Type="Variable" Display="advanced" Required="false" Mask="false">2</Config>
+  <Config Name="Encode Quality" Target="TRANSCODARR_QUALITY" Default="16" Mode="" Description="NVENC CQ value (lower = better quality, 12-28)" Type="Variable" Display="advanced" Required="false" Mask="false">16</Config>
+  <Config Name="Audio Codec" Target="TRANSCODARR_AUDIO_CODEC" Default="aac" Mode="" Description="Target audio codec (aac, ac3, eac3)" Type="Variable" Display="advanced" Required="false" Mask="false">aac</Config>
+  <Config Name="Audio Bitrate" Target="TRANSCODARR_AUDIO_BITRATE" Default="192" Mode="" Description="Audio bitrate in kbps" Type="Variable" Display="advanced" Required="false" Mask="false">192</Config>
+  <Config Name="Audio Language" Target="TRANSCODARR_AUDIO_LANG" Default="eng" Mode="" Description="Preferred audio language (eng, spa, fre, etc.)" Type="Variable" Display="advanced" Required="false" Mask="false">eng</Config>
+  <Config Name="Max Channels" Target="TRANSCODARR_MAX_CHANNELS" Default="6" Mode="" Description="Max audio channels (2=stereo, 6=5.1, 8=7.1)" Type="Variable" Display="advanced" Required="false" Mask="false">6</Config>
+  <Config Name="Max Width" Target="TRANSCODARR_MAX_WIDTH" Default="1920" Mode="" Description="Downscale video wider than this" Type="Variable" Display="advanced" Required="false" Mask="false">1920</Config>
+  <Config Name="Max Height" Target="TRANSCODARR_MAX_HEIGHT" Default="1080" Mode="" Description="Downscale video taller than this" Type="Variable" Display="advanced" Required="false" Mask="false">1080</Config>
+  <Config Name="Streams Per Disk" Target="TRANSCODARR_STREAMS_PER_DISK" Default="2" Mode="" Description="Max concurrent encodes per physical disk" Type="Variable" Display="advanced" Required="false" Mask="false">2</Config>
+  <Config Name="Encoder Preset" Target="TRANSCODARR_ENCODER_PRESET" Default="medium" Mode="" Description="NVENC preset (hq, slow, medium, fast, hp)" Type="Variable" Display="advanced" Required="false" Mask="false">medium</Config>
+  <Config Name="Disk 1" Target="/disk1" Default="" Mode="rw" Description="Direct disk mount for disk1 (optional, improves performance)" Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Disk 2" Target="/disk2" Default="" Mode="rw" Description="Direct disk mount for disk2" Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Disk 3" Target="/disk3" Default="" Mode="rw" Description="Direct disk mount for disk3" Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Disk 4" Target="/disk4" Default="" Mode="rw" Description="Direct disk mount for disk4" Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Disk 5" Target="/disk5" Default="" Mode="rw" Description="Direct disk mount for disk5" Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Disk 6" Target="/disk6" Default="" Mode="rw" Description="Direct disk mount for disk6" Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Disk 7" Target="/disk7" Default="" Mode="rw" Description="Direct disk mount for disk7" Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Disk 8" Target="/disk8" Default="" Mode="rw" Description="Direct disk mount for disk8" Type="Path" Display="advanced" Required="false" Mask="false"/>
+</Container>

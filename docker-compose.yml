@@ -1,0 +1,108 @@
+services:
+  transcodarr:
+    build:
+      context: .
+      args:
+        GPU_TYPE: nvidia                         # nvidia, intel, or cpu
+    container_name: transcodarr
+    restart: unless-stopped
+    # ── GPU Runtime ──────────────────────────────────────────
+    # NVIDIA: use nvidia runtime
+    runtime: nvidia
+    # Intel: uncomment below, remove runtime: nvidia above
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # CPU: remove runtime: nvidia, no devices needed
+    entrypoint: ["/bin/bash", "/scripts/transcodarr-config.sh"]
+    environment:
+      TZ: America/New_York
+      # NVIDIA only (remove for Intel/CPU)
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+
+      # ── Paths ──────────────────────────────────────────────────
+      TRANSCODARR_STATE_DIR: /state
+      TRANSCODARR_QUEUE_DIR: /queue
+      TRANSCODARR_LANGUAGE_MODEL_DIR: /models
+      TRANSCODARR_LANGUAGE_MODEL_HOST_DIR: ./models
+      # TRANSCODARR_TMP_DIR: "/tmp-transcode"  # Uncomment for SSD tmp pool
+
+      # ── Startup ────────────────────────────────────────────────
+      # false = start paused (default), true = start processing immediately
+      TRANSCODARR_AUTO_START: "false"
+
+      # ── Workers ────────────────────────────────────────────────
+      TRANSCODARR_GPU_WORKERS: "2"             # NVENC encode workers
+      TRANSCODARR_CPU_WORKERS: "2"             # Audio-only remux workers
+      TRANSCODARR_VALIDATE_WORKERS: "16"       # ffprobe pool size
+      TRANSCODARR_WRANGLER_WORKERS: "16"       # Disk resolver pool size
+      TRANSCODARR_STREAMS_PER_DISK: "2"        # Max concurrent encodes per disk
+      TRANSCODARR_TIMEOUT: "14400"             # Per-file timeout (4 hours)
+
+      # ── Video ──────────────────────────────────────────────────
+      TRANSCODARR_QUALITY: "16"                # NVENC CQ value (lower = better)
+      TRANSCODARR_ENCODER_PRESET: "medium"     # NVENC preset
+      TRANSCODARR_ENCODER_PROFILE: "high"      # H.264 profile
+      TRANSCODARR_HW_DECODING: "cuda"          # cuda (NVIDIA), qsv (Intel), none (CPU)
+      TRANSCODARR_MAX_WIDTH: "1920"            # Downscale if wider
+      TRANSCODARR_MAX_HEIGHT: "1080"           # Downscale if taller
+
+      # ── Audio ──────────────────────────────────────────────────
+      TRANSCODARR_AUDIO_CODEC: "aac"           # Target audio codec
+      TRANSCODARR_AUDIO_BITRATE: "192"         # AAC bitrate (kbps)
+      TRANSCODARR_AUDIO_LANG: "eng"            # Keep this language track
+      TRANSCODARR_MAX_CHANNELS: "6"            # Max audio channels (6 = 5.1)
+      TRANSCODARR_SUB_LANG: "eng"              # Subtitle language to keep
+      TRANSCODARR_FLAG_SHORT_RADARR_RUNTIME: "false" # Flag Radarr movies under 1 hour
+
+      # ── Disk Policy ────────────────────────────────────────────
+      TRANSCODARR_IGNORED_DISKS: ""            # CSV of slugs to ignore, e.g. "disk3,disk7"
+
+      # ── Space Management ───────────────────────────────────────
+      TRANSCODARR_DISK_WARN_KB: "10485760"     # 10 GB min free per disk
+      TRANSCODARR_SPACE_CHECK_INTERVAL: "30"   # Space poll interval (seconds)
+      TRANSCODARR_DEST_SPACE_RETRY_TIMEOUT: "0" # Destination disk retry cap; 0 = retry forever
+      TRANSCODARR_SSD_SPACE_RETRY_TIMEOUT: "0"  # SSD temp pool retry cap; 0 = retry forever
+      TRANSCODARR_TMP_MAX_KB: "1048576000"     # SSD temp pool max (~1 TB)
+
+      # ── Secrets (from .env) ────────────────────────────────────
+      PLEX_URL: ${PLEX_URL}
+      PLEX_TOKEN: ${PLEX_TOKEN}
+      SONARR_URL: ${SONARR_URL}
+      SONARR_API_KEY: ${SONARR_API_KEY}
+      RADARR_URL: ${RADARR_URL}
+      RADARR_API_KEY: ${RADARR_API_KEY}
+    volumes:
+      # Media libraries (FUSE paths)
+      - /path/to/movies:/movies
+      - /path/to/tv:/tv
+      # Direct disk mounts (bypass FUSE for read + write performance)
+      # Add one per physical disk that holds media:
+      # - /mnt/disk1/Media:/disk1
+      # - /mnt/disk2/Media:/disk2
+      # Tmp dir for SSD pool (optional, uncomment TRANSCODARR_TMP_DIR above)
+      # - /path/to/ssd/tmp:/tmp-transcode
+      # Persistent state (config, processed.tsv, failed-files.tsv)
+      - ./data:/state
+      # Import queue (arr webhook job files)
+      - ./queue:/queue
+      # User-managed whisper.cpp model folder (ggml-*.bin)
+      - ./models:/models
+      # Scripts (read-only bind mount)
+      - ./scripts:/scripts:ro
+    # ── Access ───────────────────────────────────────────────────
+    # Option 1: Direct port (simple, no reverse proxy)
+    ports:
+      - "7879:7879"
+    # Option 2: Behind Traefik (HTTPS, recommended)
+    # Remove the ports section above and uncomment these labels:
+    # labels:
+    #   - traefik.enable=true
+    #   - traefik.docker.network=your-traefik-network
+    #   - traefik.http.routers.transcodarr.rule=Host(`transcodarr.yourdomain.com`)
+    #   - traefik.http.routers.transcodarr.entrypoints=websecure
+    #   - traefik.http.routers.transcodarr.tls=true
+    #   - traefik.http.routers.transcodarr.tls.certresolver=your-cert-resolver
+    #   - traefik.http.services.transcodarr.loadbalancer.server.port=7879
+    # networks:
+    #   - your-traefik-network

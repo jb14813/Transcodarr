@@ -1,0 +1,12 @@
+.env
+data/
+queue/
+models/
+*.tmp
+# Local scratch / state — never commit
+.claude/
+*.csv
+# Session scratch artifacts (screenshots, local vector db, MCP scratch)
+ruvector.db
+.playwright-mcp/
+/*.png
